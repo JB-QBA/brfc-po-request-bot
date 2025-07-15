@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+gspread
+google-auth
+google-api-python-client

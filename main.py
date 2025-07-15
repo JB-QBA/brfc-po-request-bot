@@ -11,7 +11,7 @@ from email import encoders
 app = FastAPI()
 
 # CONFIG
-GMAIL_SERVICE_ACCOUNT_FILE = "/etc/secrets/gmail-api-key"  # <-- Your Gmail API JSON key
+GMAIL_SERVICE_ACCOUNT_FILE = "/etc/secrets/p2p-x-465909-c3e319be97b8.json"  # <-- Your Gmail API JSON key
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 RECIPIENT_EMAIL = "finance@bahrainrfc.com"
 

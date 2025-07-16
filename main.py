@@ -148,10 +148,12 @@ async def chat_webhook(request: Request):
         body = await request.json()
         
         # Log the full request for debugging
-        logger.info(f"Received webhook: {json.dumps(body, indent=2)}")
+        logger.info(f"Received webhook body keys: {list(body.keys())}")
         
         # Handle different event types
         event_type = body.get("eventType") or body.get("type")
+        logger.info(f"Event type: {event_type}")
+        
         if event_type == "ADDED_TO_SPACE":
             logger.info("Bot was added to a space")
             return {"text": "Hello! I'm your P2P bot. Say 'hi' to get started with purchase orders."}
@@ -160,29 +162,45 @@ async def chat_webhook(request: Request):
             logger.info("Bot was removed from a space")
             return {}
 
-        # Extract user and message information - handle both API formats
+        # Extract user and message information - handle multiple formats
         user = body.get("user", {})
         message = body.get("message", {})
         
-        if not message:
-            logger.warning("No message found in request body")
-            return {"text": "No message received"}
-            
-        # Get sender information - try both formats
-        sender = message.get("sender", {})
-        if not sender and user:
-            sender = user
-            
-        sender_email = sender.get("email", "").lower()
-        full_name = sender.get("displayName", "there")
+        logger.info(f"User keys: {list(user.keys()) if user else 'No user'}")
+        logger.info(f"Message keys: {list(message.keys()) if message else 'No message'}")
+        
+        # Try to get sender email from multiple possible locations
+        sender_email = ""
+        if user and user.get("email"):
+            sender_email = user.get("email", "").lower()
+        elif message and message.get("sender") and message.get("sender").get("email"):
+            sender_email = message.get("sender").get("email", "").lower()
+        
+        # Try to get display name from multiple locations
+        full_name = ""
+        if user and user.get("displayName"):
+            full_name = user.get("displayName", "there")
+        elif message and message.get("sender") and message.get("sender").get("displayName"):
+            full_name = message.get("sender").get("displayName", "there")
+        
         first_name = full_name.split()[0] if full_name else "there"
-        message_text = message.get("text", "").strip()
-        attachments = message.get("attachment", [])
-        space = body.get("space", {}) or message.get("space", {})
+        
+        # Try to get message text from multiple locations
+        message_text = ""
+        if message and message.get("text"):
+            message_text = message.get("text", "").strip()
+        elif message and message.get("argumentText"):
+            message_text = message.get("argumentText", "").strip()
+        
+        logger.info(f"Extracted - Email: {sender_email}, Name: {first_name}, Text: '{message_text}'")
+        
+        # Get attachments and space info
+        attachments = message.get("attachment", []) if message else []
+        space = body.get("space", {}) or (message.get("space", {}) if message else {})
         space_name = space.get("name", CHAT_SPACE_ID)
         
         # Log key message details
-        logger.info(f"Message from {sender_email}: '{message_text}'")
+        logger.info(f"Processing message from {sender_email}: '{message_text}'")
         logger.info(f"Current user state: {user_states.get(sender_email)}")
         
         state = user_states.get(sender_email)
@@ -191,6 +209,11 @@ async def chat_webhook(request: Request):
         if not message_text:
             logger.warning("Empty message text received")
             return {"text": "I didn't receive any text. Please try again."}
+            
+        # Handle empty sender email
+        if not sender_email:
+            logger.warning("No sender email found")
+            return {"text": "I couldn't identify who sent this message. Please try again."}
 
         # === FILE UPLOAD HANDLING ===
         if attachments:

@@ -147,11 +147,23 @@ async def chat_webhook(request: Request):
     try:
         body = await request.json()
         
-        # Log the full request for debugging
+        # Log the full request structure for debugging
         logger.info(f"Received webhook body keys: {list(body.keys())}")
         
-        # Handle different event types
-        event_type = body.get("eventType") or body.get("type")
+        # Handle different JSON structures - Google Chat can send different formats
+        chat_data = body.get("chat", {})
+        common_event = body.get("commonEventObject", {})
+        
+        logger.info(f"Chat data keys: {list(chat_data.keys()) if chat_data else 'No chat data'}")
+        logger.info(f"Common event keys: {list(common_event.keys()) if common_event else 'No common event'}")
+        
+        # Try to extract event type from different locations
+        event_type = None
+        if chat_data:
+            event_type = chat_data.get("eventType") or chat_data.get("type")
+        if not event_type:
+            event_type = body.get("eventType") or body.get("type")
+        
         logger.info(f"Event type: {event_type}")
         
         if event_type == "ADDED_TO_SPACE":
@@ -162,12 +174,18 @@ async def chat_webhook(request: Request):
             logger.info("Bot was removed from a space")
             return {}
 
-        # Extract user and message information - handle multiple formats
-        user = body.get("user", {})
-        message = body.get("message", {})
+        # Extract message and user information from the chat object
+        message = chat_data.get("message", {})
+        user = chat_data.get("user", {})
         
-        logger.info(f"User keys: {list(user.keys()) if user else 'No user'}")
+        # Also try the old structure in case it's mixed
+        if not message:
+            message = body.get("message", {})
+        if not user:
+            user = body.get("user", {})
+        
         logger.info(f"Message keys: {list(message.keys()) if message else 'No message'}")
+        logger.info(f"User keys: {list(user.keys()) if user else 'No user'}")
         
         # Try to get sender email from multiple possible locations
         sender_email = ""
@@ -175,6 +193,8 @@ async def chat_webhook(request: Request):
             sender_email = user.get("email", "").lower()
         elif message and message.get("sender") and message.get("sender").get("email"):
             sender_email = message.get("sender").get("email", "").lower()
+        elif common_event and common_event.get("user") and common_event.get("user").get("email"):
+            sender_email = common_event.get("user").get("email", "").lower()
         
         # Try to get display name from multiple locations
         full_name = ""
@@ -182,6 +202,8 @@ async def chat_webhook(request: Request):
             full_name = user.get("displayName", "there")
         elif message and message.get("sender") and message.get("sender").get("displayName"):
             full_name = message.get("sender").get("displayName", "there")
+        elif common_event and common_event.get("user") and common_event.get("user").get("displayName"):
+            full_name = common_event.get("user").get("displayName", "there")
         
         first_name = full_name.split()[0] if full_name else "there"
         
@@ -191,12 +213,16 @@ async def chat_webhook(request: Request):
             message_text = message.get("text", "").strip()
         elif message and message.get("argumentText"):
             message_text = message.get("argumentText", "").strip()
+        elif chat_data and chat_data.get("message") and chat_data.get("message").get("text"):
+            message_text = chat_data.get("message").get("text", "").strip()
+        elif chat_data and chat_data.get("message") and chat_data.get("message").get("argumentText"):
+            message_text = chat_data.get("message").get("argumentText", "").strip()
         
         logger.info(f"Extracted - Email: {sender_email}, Name: {first_name}, Text: '{message_text}'")
         
         # Get attachments and space info
         attachments = message.get("attachment", []) if message else []
-        space = body.get("space", {}) or (message.get("space", {}) if message else {})
+        space = chat_data.get("space", {}) or body.get("space", {}) or (message.get("space", {}) if message else {})
         space_name = space.get("name", CHAT_SPACE_ID)
         
         # Log key message details

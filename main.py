@@ -11,6 +11,21 @@ from email import encoders
 
 app = FastAPI()
 user_states = {}
+@app.post("/")
+async def chat_webhook(request: Request):
+    body = await request.json()
+    print("✅ Received Chat Payload:")
+    print(json.dumps(body, indent=2))  # <-- debug the message payload
+
+    sender = body.get("message", {}).get("sender", {})
+    sender_email = sender.get("email", "").lower()
+    full_name = sender.get("displayName", "there")
+    first_name = full_name.split()[0]
+    message_text = body.get("message", {}).get("text", "").strip()
+    state = user_states.get(sender_email)
+
+    print(f"💬 Message received from {sender_email} ({full_name}): '{message_text}' | State: {state}")
+
 
 # === CONFIG ===
 SERVICE_ACCOUNT_FILE = "/etc/secrets/winged-pen-413708-e9544129b499.json"

@@ -21,7 +21,7 @@ app = FastAPI()
 user_states = {}
 
 # === CONFIG ===
-SERVICE_ACCOUNT_FILE = "/etc/secrets/winged-pen-413708-26e387f46bb4.json"
+SERVICE_ACCOUNT_FILE = "/etc/secrets/acoustic-agent-465113-s7-df3d0e19a05e.json"
 SPREADSHEET_ID = "1U19XSieDNaDGN0khJJ8vFaDG75DwdKjE53d6MWi0Nt8"
 SHEET_TAB_NAME = "FY2025Budget"
 XERO_TAB_NAME = "Xero"

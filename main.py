@@ -119,8 +119,8 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, file: Upload
     message["from"] = SENDER_EMAIL
     message["subject"] = subject
 
-    # Add attachment
-    if file:
+    # Add attachment if provided
+    if file is not None:
         mime = MIMEBase("application", "octet-stream")
         mime.set_payload(file.file.read())
         encoders.encode_base64(mime)
@@ -128,7 +128,9 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, file: Upload
         message.attach(mime)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    body = {"raw": raw}
+    service.users().messages().send(userId="me", body=body).execute()
+
 
 # === FILE UPLOAD ENDPOINT ===
 @app.post("/upload/")

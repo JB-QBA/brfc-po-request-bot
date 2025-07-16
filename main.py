@@ -151,7 +151,7 @@ async def chat_webhook(request: Request):
         logger.info(f"Received webhook: {json.dumps(body, indent=2)}")
         
         # Handle different event types
-        event_type = body.get("type")
+        event_type = body.get("eventType") or body.get("type")
         if event_type == "ADDED_TO_SPACE":
             logger.info("Bot was added to a space")
             return {"text": "Hello! I'm your P2P bot. Say 'hi' to get started with purchase orders."}
@@ -160,25 +160,37 @@ async def chat_webhook(request: Request):
             logger.info("Bot was removed from a space")
             return {}
 
-        # Extract v1 payload fields
+        # Extract user and message information - handle both API formats
+        user = body.get("user", {})
         message = body.get("message", {})
+        
         if not message:
             logger.warning("No message found in request body")
             return {"text": "No message received"}
             
+        # Get sender information - try both formats
         sender = message.get("sender", {})
+        if not sender and user:
+            sender = user
+            
         sender_email = sender.get("email", "").lower()
         full_name = sender.get("displayName", "there")
         first_name = full_name.split()[0] if full_name else "there"
         message_text = message.get("text", "").strip()
         attachments = message.get("attachment", [])
-        space = message.get("space", {}).get("name", CHAT_SPACE_ID)
+        space = body.get("space", {}) or message.get("space", {})
+        space_name = space.get("name", CHAT_SPACE_ID)
         
         # Log key message details
         logger.info(f"Message from {sender_email}: '{message_text}'")
         logger.info(f"Current user state: {user_states.get(sender_email)}")
         
         state = user_states.get(sender_email)
+        
+        # Handle empty message text
+        if not message_text:
+            logger.warning("Empty message text received")
+            return {"text": "I didn't receive any text. Please try again."}
 
         # === FILE UPLOAD HANDLING ===
         if attachments:

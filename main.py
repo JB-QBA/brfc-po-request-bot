@@ -11,6 +11,11 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email import encoders
 from io import BytesIO
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 user_states = {}
@@ -139,124 +144,171 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, filename: st
 # === MAIN CHAT HANDLER ===
 @app.post("/")
 async def chat_webhook(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+        
+        # Log the full request for debugging
+        logger.info(f"Received webhook: {json.dumps(body, indent=2)}")
+        
+        # Handle different event types
+        event_type = body.get("type")
+        if event_type == "ADDED_TO_SPACE":
+            logger.info("Bot was added to a space")
+            return {"text": "Hello! I'm your P2P bot. Say 'hi' to get started with purchase orders."}
+        
+        if event_type == "REMOVED_FROM_SPACE":
+            logger.info("Bot was removed from a space")
+            return {}
 
-    # Extract v1 payload fields
-    message = body.get("message", {})
-    sender = message.get("sender", {})
-    sender_email = sender.get("email", "").lower()
-    full_name = sender.get("displayName", "there")
-    first_name = full_name.split()[0]
-    message_text = message.get("text", "").strip()
-    attachments = message.get("attachment", [])
-    space = message.get("space", {}).get("name", CHAT_SPACE_ID)
-    state = user_states.get(sender_email)
+        # Extract v1 payload fields
+        message = body.get("message", {})
+        if not message:
+            logger.warning("No message found in request body")
+            return {"text": "No message received"}
+            
+        sender = message.get("sender", {})
+        sender_email = sender.get("email", "").lower()
+        full_name = sender.get("displayName", "there")
+        first_name = full_name.split()[0] if full_name else "there"
+        message_text = message.get("text", "").strip()
+        attachments = message.get("attachment", [])
+        space = message.get("space", {}).get("name", CHAT_SPACE_ID)
+        
+        # Log key message details
+        logger.info(f"Message from {sender_email}: '{message_text}'")
+        logger.info(f"Current user state: {user_states.get(sender_email)}")
+        
+        state = user_states.get(sender_email)
 
-    # === FILE UPLOAD HANDLING ===
-    if attachments:
-        try:
-            file_id = attachments[0]["driveDataRef"]["driveFileId"]
-            filename = attachments[0].get("name", "quote.pdf")
-            drive_service = get_drive_service()
-            file_bytes = drive_service.files().get_media(fileId=file_id).execute()
+        # === FILE UPLOAD HANDLING ===
+        if attachments:
+            try:
+                logger.info(f"Processing attachment: {attachments[0]}")
+                file_id = attachments[0]["driveDataRef"]["driveFileId"]
+                filename = attachments[0].get("name", "quote.pdf")
+                drive_service = get_drive_service()
+                file_bytes = drive_service.files().get_media(fileId=file_id).execute()
 
-            # Send file to ApprovalMax
-            send_quote_email(
-                ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
-                "PO Quote Submission",
-                f"Quote uploaded by {first_name}",
-                filename,
-                file_bytes
+                # Send file to ApprovalMax
+                send_quote_email(
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
+                    "PO Quote Submission",
+                    f"Quote uploaded by {first_name}",
+                    filename,
+                    file_bytes
+                )
+
+                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
+                user_states[sender_email] = "awaiting_q1"
+                return {"text": "1️⃣ Does this quote require any upfront payments?"}
+            except Exception as e:
+                logger.error(f"Error handling attachment: {e}")
+                return {"text": f"⚠️ Error handling attachment: {str(e)}"}
+
+        # === STEPWISE QUESTIONS ===
+        if state == "awaiting_q1":
+            user_states[f"{sender_email}_q1"] = message_text
+            user_states[sender_email] = "awaiting_q2"
+            return {"text": "2️⃣ Is this a foreign payment that requires GSA approval?"}
+
+        if state == "awaiting_q2":
+            user_states[f"{sender_email}_q2"] = message_text
+            user_states[sender_email] = "awaiting_comments"
+            return {"text": "3️⃣ Any comments you'd like to pass along to the PO team?"}
+
+        if state == "awaiting_comments":
+            q1 = user_states.get(f"{sender_email}_q1", "N/A")
+            q2 = user_states.get(f"{sender_email}_q2", "N/A")
+            comments = message_text
+            cost_item = user_states.get(f"{sender_email}_cost_item")
+            account = user_states.get(f"{sender_email}_account")
+            department = user_states.get(f"{sender_email}_department")
+            reference = user_states.get(f"{sender_email}_reference")
+
+            summary = (
+                f"📋 *Finance Responses Received*\n"
+                f"*From:* {first_name}\n"
+                f"*Cost Item:* {cost_item}\n"
+                f"*Account:* {account}\n"
+                f"*Department:* {department}\n"
+                f"*Reference:* {reference}\n"
+                f"1️⃣ Upfront Payment Required: {q1}\n"
+                f"2️⃣ Foreign Payment / GSA Approval: {q2}\n"
+                f"3️⃣ Comments to PO Team: {comments}"
             )
 
-            post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
-            user_states[sender_email] = "awaiting_q1"
-            return {"text": "1️⃣ Does this quote require any upfront payments?"}
-        except Exception as e:
-            return {"text": f"⚠️ Error handling attachment: {str(e)}"}
+            post_to_shared_space(summary)
+            user_states[sender_email] = None
+            return {"text": f"Thanks {first_name}, you're all done ✅"}
 
-    # === STEPWISE QUESTIONS ===
-    if state == "awaiting_q1":
-        user_states[f"{sender_email}_q1"] = message_text
-        user_states[sender_email] = "awaiting_q2"
-        return {"text": "2️⃣ Is this a foreign payment that requires GSA approval?"}
+        # === Cost Item Selection ===
+        if state == "awaiting_cost_item":
+            department = user_states.get(f"{sender_email}_department")
+            account, tracking, reference, item_total = get_account_tracking_reference(message_text, department)
+            if account:
+                acct_total = get_total_budget_for_account(account, department)
+                actuals = get_actuals_for_account(account, department)
+                user_states.update({
+                    sender_email: "awaiting_file",
+                    f"{sender_email}_cost_item": message_text.title(),
+                    f"{sender_email}_account": account,
+                    f"{sender_email}_reference": reference,
+                    f"{sender_email}_department": department
+                })
+                return {"text": (
+                    f"✅ You've selected: {message_text.title()} under {department}\n\n"
+                    f"📊 Budgeted for item: {int(item_total):,}\n"
+                    f"📊 Account '{account}' budget: {int(acct_total):,}\n"
+                    f"📊 YTD actuals: {int(actuals):,}\n\n"
+                    "📎 Please upload the quote file directly here in Chat."
+                )}
+            else:
+                return {"text": f"Cost item not found under {department}. Try again."}
 
-    if state == "awaiting_q2":
-        user_states[f"{sender_email}_q2"] = message_text
-        user_states[sender_email] = "awaiting_comments"
-        return {"text": "3️⃣ Any comments you'd like to pass along to the PO team?"}
+        # === GREETING STARTER ===
+        logger.info(f"Checking greeting triggers for: '{message_text.lower()}'")
+        if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
+            logger.info(f"Greeting detected! Sender: {sender_email}")
+            if sender_email in special_users:
+                logger.info(f"Special user detected: {sender_email}")
+                user_states[sender_email] = "awaiting_department"
+                return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
+            elif sender_email in department_managers:
+                logger.info(f"Department manager detected: {sender_email}")
+                dept = department_managers[sender_email]
+                items = get_cost_items_for_department(dept)
+                user_states[sender_email] = "awaiting_cost_item"
+                user_states[f"{sender_email}_department"] = dept
+                return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
+            else:
+                logger.info(f"Unknown user: {sender_email}")
+                return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact the admin to get access."}
 
-    if state == "awaiting_comments":
-        q1 = user_states.get(f"{sender_email}_q1", "N/A")
-        q2 = user_states.get(f"{sender_email}_q2", "N/A")
-        comments = message_text
-        cost_item = user_states.get(f"{sender_email}_cost_item")
-        account = user_states.get(f"{sender_email}_account")
-        department = user_states.get(f"{sender_email}_department")
-        reference = user_states.get(f"{sender_email}_reference")
+        # === Department Selection ===
+        if state == "awaiting_department":
+            if message_text.title() in all_departments:
+                dept = message_text.title()
+                items = get_cost_items_for_department(dept)
+                user_states[sender_email] = "awaiting_cost_item"
+                user_states[f"{sender_email}_department"] = dept
+                return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
+            else:
+                return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
 
-        summary = (
-            f"📋 *Finance Responses Received*\n"
-            f"*From:* {first_name}\n"
-            f"*Cost Item:* {cost_item}\n"
-            f"*Account:* {account}\n"
-            f"*Department:* {department}\n"
-            f"*Reference:* {reference}\n"
-            f"1️⃣ Upfront Payment Required: {q1}\n"
-            f"2️⃣ Foreign Payment / GSA Approval: {q2}\n"
-            f"3️⃣ Comments to PO Team: {comments}"
-        )
+        # Default fallback
+        logger.info("No matching condition found, returning default message")
+        return {"text": "🤖 I'm not sure how to help. Start with 'Hi' or pick a cost item."}
+        
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"text": f"Sorry, there was an error processing your request: {str(e)}"}
 
-        post_to_shared_space(summary)
-        user_states[sender_email] = None
-        return {"text": f"Thanks {first_name}, you're all done ✅"}
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
-    # === Cost Item Selection ===
-    if state == "awaiting_cost_item":
-        department = user_states.get(f"{sender_email}_department")
-        account, tracking, reference, item_total = get_account_tracking_reference(message_text, department)
-        if account:
-            acct_total = get_total_budget_for_account(account, department)
-            actuals = get_actuals_for_account(account, department)
-            user_states.update({
-                sender_email: "awaiting_file",
-                f"{sender_email}_cost_item": message_text.title(),
-                f"{sender_email}_account": account,
-                f"{sender_email}_reference": reference,
-                f"{sender_email}_department": department
-            })
-            return {"text": (
-                f"✅ You've selected: {message_text.title()} under {department}\n\n"
-                f"📊 Budgeted for item: {int(item_total):,}\n"
-                f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                f"📊 YTD actuals: {int(actuals):,}\n\n"
-                "📎 Please upload the quote file directly here in Chat."
-            )}
-        else:
-            return {"text": f"Cost item not found under {department}. Try again."}
-
-    # === GREETING STARTER ===
-    if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
-        if sender_email in special_users:
-            user_states[sender_email] = "awaiting_department"
-            return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
-        elif sender_email in department_managers:
-            dept = department_managers[sender_email]
-            items = get_cost_items_for_department(dept)
-            user_states[sender_email] = "awaiting_cost_item"
-            user_states[f"{sender_email}_department"] = dept
-            return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
-
-    # === Department Selection ===
-    if state == "awaiting_department":
-        if message_text.title() in all_departments:
-            dept = message_text.title()
-            items = get_cost_items_for_department(dept)
-            user_states[sender_email] = "awaiting_cost_item"
-            user_states[f"{sender_email}_department"] = dept
-            return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
-        else:
-            return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
-
-    return {"text": "🤖 I'm not sure how to help. Start with 'Hi' or pick a cost item."}
-
+# Root endpoint for testing
+@app.get("/")
+async def root():
+    return {"message": "P2P Bot is running"}

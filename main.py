@@ -113,17 +113,19 @@ def post_to_shared_space(text: str):
 # === EMAIL SENDER ===
 def send_quote_email(to_emails: list, subject: str, body_text: str, file: UploadFile):
     service = get_gmail_service()
+
     message = MIMEMultipart()
     message["to"] = ", ".join(to_emails)
     message["from"] = SENDER_EMAIL
     message["subject"] = subject
 
     # Add attachment
-    mime = MIMEBase("application", "octet-stream")
-    mime.set_payload(file.file.read())
-    encoders.encode_base64(mime)
-    mime.add_header("Content-Disposition", f"attachment; filename={file.filename}")
-    message.attach(mime)
+    if file:
+        mime = MIMEBase("application", "octet-stream")
+        mime.set_payload(file.file.read())
+        encoders.encode_base64(mime)
+        mime.add_header("Content-Disposition", f"attachment; filename={file.filename}")
+        message.attach(mime)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     service.users().messages().send(userId="me", body={"raw": raw}).execute()

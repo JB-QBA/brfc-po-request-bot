@@ -93,7 +93,7 @@ def get_account_tracking_reference(cost_item: str, department: str):
         "Total": headers.index("Total")
     }
     for row in data_rows:
-        if row[indices["Cost Item"]].strip().lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
+        if row[indices["Cost Item"].strip()].lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
             return row[indices["Account"]], row[indices["Tracking"]], row[indices["Finance Reference"]], float(row[indices["Total"]].replace(",", "") or "0")
     return None, None, None, 0
 
@@ -145,118 +145,44 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, filename: st
 async def chat_webhook(request: Request):
     try:
         body = await request.json()
-        
-        # Log the full request structure for debugging
-        logger.info(f"Received webhook body keys: {list(body.keys())}")
-        
-        # Handle different JSON structures - Google Chat can send different formats
-        chat_data = body.get("chat", {})
-        common_event = body.get("commonEventObject", {})
-        
-        logger.info(f"Chat data keys: {list(chat_data.keys()) if chat_data else 'No chat data'}")
-        logger.info(f"Common event keys: {list(common_event.keys()) if common_event else 'No common event'}")
-        
-        # Try to extract event type from different locations
-        event_type = None
-        if chat_data:
-            event_type = chat_data.get("eventType") or chat_data.get("type")
-        if not event_type:
-            event_type = body.get("eventType") or body.get("type")
-        
-        logger.info(f"Event type: {event_type}")
-        
-        if event_type == "ADDED_TO_SPACE":
-            logger.info("Bot was added to a space")
-            return {"text": "Hello! I'm your P2P bot. Say 'hi' to get started with purchase orders."}
-        
-        if event_type == "REMOVED_FROM_SPACE":
-            logger.info("Bot was removed from a space")
-            return {}
 
-        # Extract message and user information from the chat object
-        message = chat_data.get("message", {})
-        user = chat_data.get("user", {})
-        
-        # Also try the old structure in case it's mixed
-        if not message:
-            message = body.get("message", {})
-        if not user:
-            user = body.get("user", {})
-        
-        logger.info(f"Message keys: {list(message.keys()) if message else 'No message'}")
-        logger.info(f"User keys: {list(user.keys()) if user else 'No user'}")
-        
-        # Try to get sender email from multiple possible locations
-        sender_email = ""
-        if user and user.get("email"):
-            sender_email = user.get("email", "").lower()
-        elif message and message.get("sender") and message.get("sender").get("email"):
-            sender_email = message.get("sender").get("email", "").lower()
-        elif common_event and common_event.get("user") and common_event.get("user").get("email"):
-            sender_email = common_event.get("user").get("email", "").lower()
-        
-        # Try to get display name from multiple locations
-        full_name = ""
-        if user and user.get("displayName"):
-            full_name = user.get("displayName", "there")
-        elif message and message.get("sender") and message.get("sender").get("displayName"):
-            full_name = message.get("sender").get("displayName", "there")
-        elif common_event and common_event.get("user") and common_event.get("user").get("displayName"):
-            full_name = common_event.get("user").get("displayName", "there")
-        
+        logger.info(f"Received webhook body keys: {list(body.keys())}")
+
+        chat_data = body.get("chat", {})
+        payload = chat_data.get("messagePayload", {})
+        message = payload.get("message", {})
+        sender = message.get("sender", {})
+
+        message_text = message.get("text", "").strip()
+        attachments = message.get("attachment", [])
+        sender_email = sender.get("email", "").lower()
+        full_name = sender.get("displayName", "there")
         first_name = full_name.split()[0] if full_name else "there"
-        
-        # Try to get message text from multiple locations
-        message_text = ""
-        if message and message.get("text"):
-            message_text = message.get("text", "").strip()
-        elif message and message.get("argumentText"):
-            message_text = message.get("argumentText", "").strip()
-        elif chat_data and chat_data.get("message") and chat_data.get("message").get("text"):
-            message_text = chat_data.get("message").get("text", "").strip()
-        elif chat_data and chat_data.get("message") and chat_data.get("message").get("argumentText"):
-            message_text = chat_data.get("message").get("argumentText", "").strip()
-        
+
         logger.info(f"Extracted - Email: {sender_email}, Name: {first_name}, Text: '{message_text}'")
-        
-        # Get attachments and space info
-        attachments = message.get("attachment", []) if message else []
-        space = chat_data.get("space", {}) or body.get("space", {}) or (message.get("space", {}) if message else {})
-        space_name = space.get("name", CHAT_SPACE_ID)
-        
-        # Log key message details
         logger.info(f"Processing message from {sender_email}: '{message_text}'")
         logger.info(f"Current user state: {user_states.get(sender_email)}")
-        
+
         state = user_states.get(sender_email)
-        
-        # Handle empty message text
+
         if not message_text:
             logger.warning("Empty message text received")
             return {"text": "I didn't receive any text. Please try again."}
-            
-        # Handle empty sender email
+
         if not sender_email:
             logger.warning("No sender email found")
             return {"text": "I couldn't identify who sent this message. Please try again."}
 
-        # === FILE UPLOAD HANDLING ===
         if attachments:
             try:
-                logger.info(f"Processing attachment: {attachments[0]}")
                 file_id = attachments[0]["driveDataRef"]["driveFileId"]
                 filename = attachments[0].get("name", "quote.pdf")
                 drive_service = get_drive_service()
                 file_bytes = drive_service.files().get_media(fileId=file_id).execute()
 
-                # Send file to ApprovalMax
-                send_quote_email(
-                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
-                    "PO Quote Submission",
-                    f"Quote uploaded by {first_name}",
-                    filename,
-                    file_bytes
-                )
+                send_quote_email([
+                    "bahrain-rugby-football-club-po@mail.approvalmax.com"
+                ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
 
                 post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
                 user_states[sender_email] = "awaiting_q1"
@@ -265,7 +191,6 @@ async def chat_webhook(request: Request):
                 logger.error(f"Error handling attachment: {e}")
                 return {"text": f"⚠️ Error handling attachment: {str(e)}"}
 
-        # === STEPWISE QUESTIONS ===
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text
             user_states[sender_email] = "awaiting_q2"
@@ -301,7 +226,27 @@ async def chat_webhook(request: Request):
             user_states[sender_email] = None
             return {"text": f"Thanks {first_name}, you're all done ✅"}
 
-        # === Cost Item Selection ===
+        if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
+            if sender_email in special_users:
+                user_states[sender_email] = "awaiting_department"
+                return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
+            elif sender_email in department_managers:
+                dept = department_managers[sender_email]
+                items = get_cost_items_for_department(dept)
+                user_states[sender_email] = "awaiting_cost_item"
+                user_states[f"{sender_email}_department"] = dept
+                return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
+
+        if state == "awaiting_department":
+            if message_text.title() in all_departments:
+                dept = message_text.title()
+                items = get_cost_items_for_department(dept)
+                user_states[sender_email] = "awaiting_cost_item"
+                user_states[f"{sender_email}_department"] = dept
+                return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
+            else:
+                return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
+
         if state == "awaiting_cost_item":
             department = user_states.get(f"{sender_email}_department")
             account, tracking, reference, item_total = get_account_tracking_reference(message_text, department)
@@ -325,50 +270,16 @@ async def chat_webhook(request: Request):
             else:
                 return {"text": f"Cost item not found under {department}. Try again."}
 
-        # === GREETING STARTER ===
-        logger.info(f"Checking greeting triggers for: '{message_text.lower()}'")
-        if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
-            logger.info(f"Greeting detected! Sender: {sender_email}")
-            if sender_email in special_users:
-                logger.info(f"Special user detected: {sender_email}")
-                user_states[sender_email] = "awaiting_department"
-                return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
-            elif sender_email in department_managers:
-                logger.info(f"Department manager detected: {sender_email}")
-                dept = department_managers[sender_email]
-                items = get_cost_items_for_department(dept)
-                user_states[sender_email] = "awaiting_cost_item"
-                user_states[f"{sender_email}_department"] = dept
-                return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
-            else:
-                logger.info(f"Unknown user: {sender_email}")
-                return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact the admin to get access."}
-
-        # === Department Selection ===
-        if state == "awaiting_department":
-            if message_text.title() in all_departments:
-                dept = message_text.title()
-                items = get_cost_items_for_department(dept)
-                user_states[sender_email] = "awaiting_cost_item"
-                user_states[f"{sender_email}_department"] = dept
-                return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
-            else:
-                return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
-
-        # Default fallback
-        logger.info("No matching condition found, returning default message")
         return {"text": "🤖 I'm not sure how to help. Start with 'Hi' or pick a cost item."}
-        
+
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return {"text": f"Sorry, there was an error processing your request: {str(e)}"}
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
-# Root endpoint for testing
 @app.get("/")
 async def root():
     return {"message": "P2P Bot is running"}

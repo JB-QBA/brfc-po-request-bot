@@ -274,12 +274,12 @@ from email import encoders
 app = FastAPI()
 
 # CONFIG
-GMAIL_SERVICE_ACCOUNT_FILE = "C:\\Users\\Finance Manager\\OneDrive\\The Botes Family\\Johann's Documents\\Agents\\BRFC Agents\\Common Files\\p2p-x-465909-c3e319be97b8.json"  # <-- Your Gmail API JSON key
+GMAIL_SERVICE_ACCOUNT_FILE = "/etc/secrets/p2p-x-465909-c3e319be97b8.json"  # <-- Your Gmail API JSON key
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 RECIPIENT_EMAIL = "finance@bahrainrfc.com"
 
 # Path to test attachment
-TEST_ATTACHMENT_PATH = "C:\\Users\\Finance Manager\\OneDrive\\Desktop\\Estimate 2663.pdf"
+# TEST_ATTACHMENT_PATH = "C:\\Users\\Finance Manager\\OneDrive\\Desktop\\Estimate 2663.pdf"
 
 # SCOPES
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]

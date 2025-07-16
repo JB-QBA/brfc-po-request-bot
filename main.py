@@ -318,8 +318,3 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, file: Upload
         print(f"✅ Message sent! ID: {send_message['id']}")
     except HttpError as error:
         print(f"❌ An error occurred: {error}")
-
-# Run test once on startup
-@app.on_event("startup")
-def startup_event():
-    send_email_with_attachment()

@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Request, UploadFile, File
+# P2P 3000 Bot with Chat Attachment Upload + Gmail Integration
+
+from fastapi import FastAPI, Request
 import os
 import json
 import base64
@@ -8,24 +10,10 @@ from googleapiclient.discovery import build
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email import encoders
+from io import BytesIO
 
 app = FastAPI()
 user_states = {}
-@app.post("/")
-async def chat_webhook(request: Request):
-    body = await request.json()
-    print("✅ Received Chat Payload:")
-    print(json.dumps(body, indent=2))  # <-- debug the message payload
-
-    sender = body.get("message", {}).get("sender", {})
-    sender_email = sender.get("email", "").lower()
-    full_name = sender.get("displayName", "there")
-    first_name = full_name.split()[0]
-    message_text = body.get("message", {}).get("text", "").strip()
-    state = user_states.get(sender_email)
-
-    print(f"💬 Message received from {sender_email} ({full_name}): '{message_text}' | State: {state}")
-
 
 # === CONFIG ===
 SERVICE_ACCOUNT_FILE = "/etc/secrets/winged-pen-413708-e9544129b499.json"
@@ -36,11 +24,11 @@ XERO_TAB_NAME = "Xero"
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
 
-# === USERS & DEPARTMENTS ===
 special_users = {
     "finance@bahrainrfc.com": "Johann",
     "generalmanager@bahrainrfc.com": "Paul"
 }
+
 department_managers = {
     "hr@bahrainrfc.com": "Human Capital",
     "facilities@bahrainrfc.com": "Facilities",
@@ -49,13 +37,15 @@ department_managers = {
     "marketing@bahrainrfc.com": "Marketing",
     "sponsorship@bahrainrfc.com": "Sponsorship"
 }
+
 all_departments = [
     "Clubhouse", "Facilities", "Finance", "Front Office",
     "Human Capital", "Management", "Marketing", "Sponsorship", "Sports"
 ]
+
 greeting_triggers = ["hi", "hello", "hey", "howzit", "salam", "hey cunt", "howdy"]
 
-# === GOOGLE AUTH HELPERS ===
+# === GOOGLE AUTH ===
 def get_gsheet():
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=[
         "https://www.googleapis.com/auth/drive.readonly",
@@ -75,7 +65,11 @@ def get_gmail_service():
     )
     return build("gmail", "v1", credentials=creds)
 
-# === GOOGLE SHEET FETCH ===
+def get_drive_service():
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    return build("drive", "v3", credentials=creds)
+
+# === SHEET HELPERS ===
 def get_cost_items_for_department(department: str):
     sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME)
     rows = sheet.get_all_values()[1:]
@@ -96,11 +90,7 @@ def get_account_tracking_reference(cost_item: str, department: str):
     }
     for row in data_rows:
         if row[indices["Cost Item"]].strip().lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
-            account = row[indices["Account"]].strip()
-            tracking = row[indices["Tracking"]].strip()
-            reference = row[indices["Finance Reference"]].strip()
-            total = float(row[indices["Total"]].replace(",", "") or "0")
-            return account, tracking, reference, total
+            return row[indices["Account"]], row[indices["Tracking"]], row[indices["Finance Reference"]], float(row[indices["Total"]].replace(",", "") or "0")
     return None, None, None, 0
 
 def get_total_budget_for_account(account: str, department: str):
@@ -125,74 +115,51 @@ def post_to_shared_space(text: str):
     svc = get_chat_service()
     svc.spaces().messages().create(parent=CHAT_SPACE_ID, body={"text": text}).execute()
 
-# === EMAIL SENDER ===
-def send_quote_email(to_emails: list, subject: str, body_text: str, file: UploadFile):
+# === GMAIL SEND ===
+def send_quote_email(to_emails: list, subject: str, body_text: str, filename: str, file_bytes: bytes):
     service = get_gmail_service()
-
     message = MIMEMultipart()
     message["to"] = ", ".join(to_emails)
     message["from"] = SENDER_EMAIL
     message["subject"] = subject
 
-    # Add attachment if provided
-    if file is not None:
-        mime = MIMEBase("application", "octet-stream")
-        mime.set_payload(file.file.read())
-        encoders.encode_base64(mime)
-        mime.add_header("Content-Disposition", f"attachment; filename={file.filename}")
-        message.attach(mime)
+    mime = MIMEBase("application", "octet-stream")
+    mime.set_payload(file_bytes)
+    encoders.encode_base64(mime)
+    mime.add_header("Content-Disposition", f"attachment; filename={filename}")
+    message.attach(mime)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    body = {"raw": raw}
-    service.users().messages().send(userId="me", body=body).execute()
+    service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
-
-# === FILE UPLOAD ENDPOINT ===
-@app.post("/upload/")
-async def upload_file(request: Request, file: UploadFile = File(...)):
-    body = await request.form()
-    sender_email = body.get("sender_email", "").lower()
-    full_name = body.get("full_name", "User")
-    first_name = full_name.split()[0]
-
-    # State recall
-    cost_item = user_states.get(f"{sender_email}_cost_item")
-    account = user_states.get(f"{sender_email}_account")
-    department = user_states.get(f"{sender_email}_department")
-    reference = user_states.get(f"{sender_email}_reference")
-
-    # Send quote to ApprovalMax
-    send_quote_email(
-        ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
-        "New PO Quote Submission",
-        f"Quote for {cost_item} under {department}",
-        file
-    )
-
-    # Notify procurement
-    summary = (
-        f"📩 *New PO Request Received!*\n"
-        f"*Cost Item:* {cost_item}\n"
-        f"*Account:* {account}\n"
-        f"*Department:* {department}\n"
-        f"*Projects/Events/Budgets:* {reference}\n"
-        f"*File:* {file.filename}\n\n"
-        f"Please make sure that the approved PO is sent to {first_name}."
-    )
-    post_to_shared_space(summary)
-    user_states[sender_email] = "awaiting_q1"
-    return {"text": "1️⃣ Does this quote require any upfront payments?"}
-
-# === CHAT MESSAGE HANDLER ===
+# === MAIN CHAT HANDLER ===
 @app.post("/")
 async def chat_webhook(request: Request):
     body = await request.json()
-    sender = body.get("message", {}).get("sender", {})
+    payload = body.get("chat", {}).get("messagePayload", {})
+    sender = payload.get("message", {}).get("sender", {})
     sender_email = sender.get("email", "").lower()
     full_name = sender.get("displayName", "there")
     first_name = full_name.split()[0]
-    message_text = body.get("message", {}).get("text", "").strip()
+    message_text = payload.get("message", {}).get("text", "").strip()
+    attachments = payload.get("message", {}).get("attachment", [])
     state = user_states.get(sender_email)
+
+    if attachments:
+        file_id = attachments[0]["driveDataRef"]["driveFileId"]
+        filename = attachments[0].get("contentName", "quote.pdf")
+        drive_service = get_drive_service()
+        file_bytes = drive_service.files().get_media(fileId=file_id).execute()
+
+        # Send file to ApprovalMax
+        send_quote_email([
+            "bahrain-rugby-football-club-po@mail.approvalmax.com"
+        ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
+
+        # Notify and continue
+        post_to_shared_space(f"📩 *Quote file uploaded by {first_name}* — {filename}")
+        user_states[sender_email] = "awaiting_q1"
+        return {"text": "1️⃣ Does this quote require any upfront payments?"}
 
     if state == "awaiting_q1":
         user_states[f"{sender_email}_q1"] = message_text
@@ -224,15 +191,8 @@ async def chat_webhook(request: Request):
             f"2️⃣ Foreign Payment / GSA Approval: {q2}\n"
             f"3️⃣ Comments to PO Team: {comments}"
         )
+
         post_to_shared_space(summary)
-
-        send_quote_email(
-            ["finance@bahrainrfc.com", "accounts@bahrainrfc.com", "stores@bahrainrfc.com"],
-            f"Finance PO Review – {cost_item}",
-            summary,
-            file=None  # optionally attach quote file if stored
-        )
-
         user_states[sender_email] = None
         return {"text": f"Thanks {first_name}, you're all done ✅"}
 
@@ -246,14 +206,15 @@ async def chat_webhook(request: Request):
                 sender_email: "awaiting_file",
                 f"{sender_email}_cost_item": message_text.title(),
                 f"{sender_email}_account": account,
-                f"{sender_email}_reference": reference
+                f"{sender_email}_reference": reference,
+                f"{sender_email}_department": department
             })
             return {"text": (
                 f"✅ You've selected: {message_text.title()} under {department}\n\n"
                 f"📊 Budgeted for item: {int(item_total):,}\n"
                 f"📊 Account '{account}' budget: {int(acct_total):,}\n"
                 f"📊 YTD actuals: {int(actuals):,}\n\n"
-                "📎 Please upload the quote file using our upload endpoint or web form.\n"
+                "📎 Please upload the quote file directly here in Chat."
             )}
         else:
             return {"text": f"Cost item not found under {department}. Try again."}

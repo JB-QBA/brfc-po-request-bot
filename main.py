@@ -117,49 +117,52 @@ def post_to_shared_space(text: str):
 
 # === GMAIL SEND ===
 def send_quote_email(to_emails: list, subject: str, body_text: str, filename: str, file_bytes: bytes):
-    service = get_gmail_service()
-    message = MIMEMultipart()
-    message["to"] = ", ".join(to_emails)
-    message["from"] = SENDER_EMAIL
-    message["subject"] = subject
+    try:
+        service = get_gmail_service()
+        message = MIMEMultipart()
+        message["to"] = ", ".join(to_emails)
+        message["from"] = SENDER_EMAIL
+        message["subject"] = subject
 
-    mime = MIMEBase("application", "octet-stream")
-    mime.set_payload(file_bytes)
-    encoders.encode_base64(mime)
-    mime.add_header("Content-Disposition", f"attachment; filename={filename}")
-    message.attach(mime)
+        mime = MIMEBase("application", "octet-stream")
+        mime.set_payload(file_bytes)
+        encoders.encode_base64(mime)
+        mime.add_header("Content-Disposition", f"attachment; filename={filename}")
+        message.attach(mime)
 
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"📧 Email sent to {to_emails}")
+    except Exception as e:
+        print(f"❌ Email send failed: {e}")
 
 # === MAIN CHAT HANDLER ===
 @app.post("/")
 async def chat_webhook(request: Request):
     body = await request.json()
-    payload = body.get("chat", {}).get("messagePayload", {})
-    sender = payload.get("message", {}).get("sender", {})
+    sender = body.get("message", {}).get("sender", {})
     sender_email = sender.get("email", "").lower()
     full_name = sender.get("displayName", "there")
     first_name = full_name.split()[0]
-    message_text = payload.get("message", {}).get("text", "").strip()
-    attachments = payload.get("message", {}).get("attachment", [])
+    message_text = body.get("message", {}).get("text", "").strip()
+    attachments = body.get("message", {}).get("attachment", [])
     state = user_states.get(sender_email)
 
     if attachments:
-        file_id = attachments[0]["driveDataRef"]["driveFileId"]
+        file_id = attachments[0].get("driveDataRef", {}).get("driveFileId")
         filename = attachments[0].get("contentName", "quote.pdf")
         drive_service = get_drive_service()
-        file_bytes = drive_service.files().get_media(fileId=file_id).execute()
-
-        # Send file to ApprovalMax
-        send_quote_email([
-            "bahrain-rugby-football-club-po@mail.approvalmax.com"
-        ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
-
-        # Notify and continue
-        post_to_shared_space(f"📩 *Quote file uploaded by {first_name}* — {filename}")
-        user_states[sender_email] = "awaiting_q1"
-        return {"text": "1️⃣ Does this quote require any upfront payments?"}
+        try:
+            file_bytes = drive_service.files().get_media(fileId=file_id).execute()
+            send_quote_email([
+                "bahrain-rugby-football-club-po@mail.approvalmax.com"
+            ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
+            post_to_shared_space(f"📩 *Quote file uploaded by {first_name}* — {filename}")
+            user_states[sender_email] = "awaiting_q1"
+            return {"text": "1️⃣ Does this quote require any upfront payments?"}
+        except Exception as e:
+            print(f"❌ Error handling attachment: {e}")
+            return {"text": "Couldn't access the uploaded file. Please try again."}
 
     if state == "awaiting_q1":
         user_states[f"{sender_email}_q1"] = message_text
@@ -219,7 +222,7 @@ async def chat_webhook(request: Request):
         else:
             return {"text": f"Cost item not found under {department}. Try again."}
 
-    if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
+    if message_text and any(message_text.lower().startswith(greet) for greet in greeting_triggers):
         if sender_email in special_users:
             user_states[sender_email] = "awaiting_department"
             return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}

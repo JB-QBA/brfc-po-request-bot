@@ -278,9 +278,6 @@ GMAIL_SERVICE_ACCOUNT_FILE = "/etc/secrets/p2p-x-465909-c3e319be97b8.json"  # <-
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 RECIPIENT_EMAIL = "finance@bahrainrfc.com"
 
-# Path to test attachment
-# TEST_ATTACHMENT_PATH = "C:\\Users\\Finance Manager\\OneDrive\\Desktop\\Estimate 2663.pdf"
-
 # SCOPES
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
@@ -302,7 +299,6 @@ def send_email_with_attachment():
     message["subject"] = "PO Request Test - File Attachment Only"
 
     # Add attachment
-    with open(TEST_ATTACHMENT_PATH, "rb") as f:
         mime = MIMEBase("application", "octet-stream")
         mime.set_payload(f.read())
         encoders.encode_base64(mime)

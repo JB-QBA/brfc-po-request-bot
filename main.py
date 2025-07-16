@@ -63,7 +63,7 @@ def get_chat_service():
 
 def get_gmail_service():
     creds = Credentials.from_service_account_file(
-        EMAIL_SERVICE_ACCOUNT_FILE,
+        SERVICE_ACCOUNT_FILE,
         scopes=["https://www.googleapis.com/auth/gmail.send"],
         subject=SENDER_EMAIL
     )

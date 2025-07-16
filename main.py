@@ -293,24 +293,25 @@ def get_gmail_service():
     )
     return build("gmail", "v1", credentials=creds)
 
-def send_email_with_attachment():
+def send_quote_email(to_emails: list, subject: str, body_text: str, file: UploadFile):
     service = get_gmail_service()
 
-    # Compose email with attachment
     message = MIMEMultipart()
-    message["to"] = RECIPIENT_EMAIL
+    message["to"] = ", ".join(to_emails)
     message["from"] = SENDER_EMAIL
-    message["subject"] = "PO Request Test - File Attachment Only"
+    message["subject"] = subject
 
-    # Add attachment
+    # Add attachment if provided
+    if file is not None:
         mime = MIMEBase("application", "octet-stream")
-        mime.set_payload(f.read())
+        mime.set_payload(file.file.read())
         encoders.encode_base64(mime)
-        mime.add_header("Content-Disposition", "attachment", filename=os.path.basename(TEST_ATTACHMENT_PATH))
+        mime.add_header("Content-Disposition", f"attachment; filename={file.filename}")
         message.attach(mime)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     body = {"raw": raw}
+    service.users().messages().send(userId="me", body=body).execute()
 
     try:
         send_message = service.users().messages().send(userId="me", body=body).execute()

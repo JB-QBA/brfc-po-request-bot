@@ -140,30 +140,42 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, filename: st
 @app.post("/")
 async def chat_webhook(request: Request):
     body = await request.json()
-    sender = body.get("message", {}).get("sender", {})
+
+    # Extract v1 payload fields
+    message = body.get("message", {})
+    sender = message.get("sender", {})
     sender_email = sender.get("email", "").lower()
     full_name = sender.get("displayName", "there")
     first_name = full_name.split()[0]
-    message_text = body.get("message", {}).get("text", "").strip()
-    attachments = body.get("message", {}).get("attachment", [])
+    message_text = message.get("text", "").strip()
+    attachments = message.get("attachment", [])
+    space = message.get("space", {}).get("name", CHAT_SPACE_ID)
     state = user_states.get(sender_email)
 
+    # === FILE UPLOAD HANDLING ===
     if attachments:
-        file_id = attachments[0].get("driveDataRef", {}).get("driveFileId")
-        filename = attachments[0].get("contentName", "quote.pdf")
-        drive_service = get_drive_service()
         try:
+            file_id = attachments[0]["driveDataRef"]["driveFileId"]
+            filename = attachments[0].get("name", "quote.pdf")
+            drive_service = get_drive_service()
             file_bytes = drive_service.files().get_media(fileId=file_id).execute()
-            send_quote_email([
-                "bahrain-rugby-football-club-po@mail.approvalmax.com"
-            ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
-            post_to_shared_space(f"📩 *Quote file uploaded by {first_name}* — {filename}")
+
+            # Send file to ApprovalMax
+            send_quote_email(
+                ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
+                "PO Quote Submission",
+                f"Quote uploaded by {first_name}",
+                filename,
+                file_bytes
+            )
+
+            post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
             user_states[sender_email] = "awaiting_q1"
             return {"text": "1️⃣ Does this quote require any upfront payments?"}
         except Exception as e:
-            print(f"❌ Error handling attachment: {e}")
-            return {"text": "Couldn't access the uploaded file. Please try again."}
+            return {"text": f"⚠️ Error handling attachment: {str(e)}"}
 
+    # === STEPWISE QUESTIONS ===
     if state == "awaiting_q1":
         user_states[f"{sender_email}_q1"] = message_text
         user_states[sender_email] = "awaiting_q2"
@@ -199,6 +211,7 @@ async def chat_webhook(request: Request):
         user_states[sender_email] = None
         return {"text": f"Thanks {first_name}, you're all done ✅"}
 
+    # === Cost Item Selection ===
     if state == "awaiting_cost_item":
         department = user_states.get(f"{sender_email}_department")
         account, tracking, reference, item_total = get_account_tracking_reference(message_text, department)
@@ -222,7 +235,8 @@ async def chat_webhook(request: Request):
         else:
             return {"text": f"Cost item not found under {department}. Try again."}
 
-    if message_text and any(message_text.lower().startswith(greet) for greet in greeting_triggers):
+    # === GREETING STARTER ===
+    if any(message_text.lower().startswith(greet) for greet in greeting_triggers):
         if sender_email in special_users:
             user_states[sender_email] = "awaiting_department"
             return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
@@ -233,6 +247,7 @@ async def chat_webhook(request: Request):
             user_states[f"{sender_email}_department"] = dept
             return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
 
+    # === Department Selection ===
     if state == "awaiting_department":
         if message_text.title() in all_departments:
             dept = message_text.title()
@@ -243,4 +258,5 @@ async def chat_webhook(request: Request):
         else:
             return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
 
-    return {"text": "I'm not sure how to help. Start with 'Hi' or pick a cost item."}
+    return {"text": "🤖 I'm not sure how to help. Start with 'Hi' or pick a cost item."}
+

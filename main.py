@@ -10,7 +10,6 @@ from googleapiclient.discovery import build
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email import encoders
-from io import BytesIO
 import logging
 
 # Configure logging
@@ -39,7 +38,9 @@ department_managers = {
     "clubhouse@bahrainrfc.com": "Clubhouse",
     "sports@bahrainrfc.com": "Sports",
     "marketing@bahrainrfc.com": "Marketing",
-    "sponsorship@bahrainrfc.com": "Sponsorship"
+    "sponsorship@bahrainrfc.com": "Sponsorship",
+    "gym@bahrainrfc.com": "Sports",
+    "juniorsport@bahrainrfc.com": "Sports"
 }
 
 all_departments = [
@@ -166,18 +167,25 @@ async def chat_webhook(request: Request):
         first_name = full_name.split()[0] if full_name else "there"
         state = user_states.get(sender_email)
 
-        logger.info(f"From: {sender_email}, Text: {message_text}, State: {state}")
-
         if attachments:
             try:
-                file_id = attachments[0]["driveDataRef"]["driveFileId"]
-                filename = attachments[0].get("name", "quote.pdf")
+                attachment = attachments[0]
+                drive_ref = attachment.get("driveDataRef")
+                if not drive_ref:
+                    raise ValueError("No driveDataRef found in attachment")
+
+                file_id = drive_ref["driveFileId"]
+                filename = attachment.get("name", "quote.pdf")
                 drive_service = get_drive_service()
                 file_bytes = drive_service.files().get_media(fileId=file_id).execute()
 
-                send_quote_email([
-                    "finance@bahrainrfc.com"
-                ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
+                send_quote_email(
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
+                    "PO Quote Submission",
+                    f"Quote uploaded by {first_name}",
+                    filename,
+                    file_bytes
+                )
 
                 post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
                 user_states[sender_email] = "awaiting_q1"

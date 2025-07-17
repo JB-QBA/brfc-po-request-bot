@@ -176,7 +176,7 @@ async def chat_webhook(request: Request):
                 file_bytes = drive_service.files().get_media(fileId=file_id).execute()
 
                 send_quote_email([
-                    "bahrain-rugby-football-club-po@mail.approvalmax.com"
+                    "finance@bahrainrfc.com"
                 ], "PO Quote Submission", f"Quote uploaded by {first_name}", filename, file_bytes)
 
                 post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")

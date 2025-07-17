@@ -1,4 +1,4 @@
-# P2P 3000 Bot – Dual Attachment Support
+# P2P 3000 Bot – Dual Attachment Support (Corrected)
 
 from fastapi import FastAPI, Request
 import os
@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email import encoders
+from google.auth.transport.requests import Request as GoogleAuthRequest
 import logging
 
 # Logging
@@ -153,8 +154,7 @@ def download_direct_file(attachment_ref: dict) -> bytes:
     url = f"https://chat.googleapis.com/v1/media/{attachment_token}?alt=media"
 
     creds = get_creds(["https://www.googleapis.com/auth/chat.bot"])
-    auth_req = requests.Request()
-    creds.refresh(auth_req)
+    creds.refresh(GoogleAuthRequest())
     headers = {"Authorization": f"Bearer {creds.token}"}
 
     res = requests.get(url, headers=headers)
@@ -176,12 +176,14 @@ async def chat_webhook(request: Request):
         first_name = sender.get("displayName", "there").split()[0]
         state = user_states.get(sender_email)
 
+        # Reset flow
         if message_text.lower() in reset_triggers:
             user_states.pop(sender_email, None)
             for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
                 user_states.pop(k)
             return {"text": f"✅ No problem {first_name}, your PO flow has been reset. Just say hi to begin again."}
 
+        # Handle file uploads
         if attachments:
             try:
                 att = attachments[0]
@@ -198,7 +200,7 @@ async def chat_webhook(request: Request):
                     raise ValueError("File could not be loaded")
 
                 send_quote_email(
-                    ["botes.jp@gmail.com"],  # 👈 Use your test address here
+                    ["botes.jp@gmail.com"],  # 👈 testing address
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name}",
                     filename,
@@ -213,7 +215,7 @@ async def chat_webhook(request: Request):
                 logger.error(f"Attachment error: {e}")
                 return {"text": f"⚠️ Error handling attachment: {str(e)}"}
 
-        # === TEXT FLOW ===
+        # Main flow
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text
             user_states[sender_email] = "awaiting_q2"

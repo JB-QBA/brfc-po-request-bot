@@ -1,4 +1,4 @@
-# P2P 3000 Bot – Final Attachment Fix
+# P2P 3000 Bot – Final Attachment Format Fix using EmailMessage
 
 from fastapi import FastAPI, Request
 import os
@@ -9,9 +9,7 @@ import requests
 import mimetypes
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email import encoders
+from email.message import EmailMessage
 from google.auth.transport.requests import Request as GoogleAuthRequest
 import logging
 
@@ -128,27 +126,27 @@ def get_actuals_for_account(account: str, department: str):
 def post_to_shared_space(text: str):
     get_chat_service().spaces().messages().create(parent=CHAT_SPACE_ID, body={"text": text}).execute()
 
-# === EMAIL SENDER (with correct MIME) ===
+# === EMAIL SENDER (with EmailMessage) ===
 def send_quote_email(to_emails, subject, body, filename, file_bytes):
     try:
         service = get_gmail_service()
-        message = MIMEMultipart()
-        message["to"] = ", ".join(to_emails)
-        message["from"] = SENDER_EMAIL
-        message["subject"] = subject
 
-        # Guess correct MIME type
+        # Guess MIME type
         mime_type, _ = mimetypes.guess_type(filename)
         maintype, subtype = (mime_type or "application/octet-stream").split("/")
 
-        mime = MIMEBase(maintype, subtype)
-        mime.set_payload(file_bytes)
-        encoders.encode_base64(mime)
-        mime.add_header("Content-Disposition", f'attachment; filename="{filename}"')
-        message.attach(mime)
+        message = EmailMessage()
+        message["To"] = ", ".join(to_emails)
+        message["From"] = SENDER_EMAIL
+        message["Subject"] = subject
+        message.set_content(body)
+
+        message.add_attachment(file_bytes, maintype=maintype, subtype=subtype, filename=filename)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print("📧 Email sent correctly with attachment")
+
     except Exception as e:
         print(f"❌ Email failed: {e}")
 
@@ -181,7 +179,7 @@ async def chat_webhook(request: Request):
         first_name = sender.get("displayName", "there").split()[0]
         state = user_states.get(sender_email)
 
-        if message_text.lower() in reset_triggers:
+        if message_text.lower() in ["cancel", "restart", "start over"]:
             user_states.pop(sender_email, None)
             for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
                 user_states.pop(k)
@@ -203,7 +201,7 @@ async def chat_webhook(request: Request):
                     raise ValueError("File could not be loaded")
 
                 send_quote_email(
-                    ["botes.jp@gmail.com"],  # test address
+                    ["botes.jp@gmail.com"],  # your testing address
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name}",
                     filename,
@@ -218,6 +216,7 @@ async def chat_webhook(request: Request):
                 logger.error(f"Attachment error: {e}")
                 return {"text": f"⚠️ Error handling attachment: {str(e)}"}
 
+        # TEXT FLOW
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text
             user_states[sender_email] = "awaiting_q2"

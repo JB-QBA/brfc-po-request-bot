@@ -83,17 +83,28 @@ def get_account_tracking_reference(cost_item: str, department: str):
     sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME)
     rows = sheet.get_all_values()
     headers = rows[0]
-    data = rows[1:]
+    data_rows = rows[1:]
 
-    idx = lambda h: headers.index(h) if h in headers else -1
-    a, d, i, t, r, tot = idx("Account"), idx("Department"), idx("Cost Item"), idx("Tracking"), idx("Finance Reference"), idx("Total")
+    account_idx = headers.index("Account") if "Account" in headers else 0
+    dept_idx = headers.index("Department") if "Department" in headers else 1
+    item_idx = headers.index("Cost Item") if "Cost Item" in headers else 3
+    tracking_idx = headers.index("Tracking") if "Tracking" in headers else 4
+    ref_idx = headers.index("Finance Reference") if "Finance Reference" in headers else 5
+    total_idx = headers.index("Total") if "Total" in headers else 17
 
-    for row in data:
-        if len(row) > max(a, d, i, t, r, tot) and row[i].strip().lower() == cost_item.lower() and row[d].strip().lower() == department.lower():
-            try:
-                return row[a], row[t], row[r], float(row[tot].replace(",", "") or "0")
-            except:
-                return row[a], row[t], row[r], 0
+    for row in data_rows:
+        if len(row) > max(account_idx, dept_idx, item_idx, tracking_idx, ref_idx, total_idx):
+            if row[item_idx].strip().lower() == cost_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                account = row[account_idx].strip()
+                tracking = row[tracking_idx].strip()
+                reference = row[ref_idx].strip()
+                total_str = row[total_idx].replace(",", "") if row[total_idx] else "0"
+                try:
+                    total_budget = float(total_str)
+                except:
+                    total_budget = 0
+                return account, tracking, reference, total_budget
+
     return None, None, None, 0
 
 def get_total_budget_for_account(account: str, department: str):

@@ -93,7 +93,7 @@ def get_account_tracking_reference(cost_item: str, department: str):
         "Total": headers.index("Total")
     }
     for row in data_rows:
-        if row[indices["Cost Item"].strip()].lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
+        if row[indices["Cost Item"]].strip().lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
             return row[indices["Account"]], row[indices["Tracking"]], row[indices["Finance Reference"]], float(row[indices["Total"]].replace(",", "") or "0")
     return None, None, None, 0
 
@@ -145,33 +145,18 @@ def send_quote_email(to_emails: list, subject: str, body_text: str, filename: st
 async def chat_webhook(request: Request):
     try:
         body = await request.json()
+        logger.info(f"Received webhook: {json.dumps(body, indent=2)}")
 
-        logger.info(f"Received webhook body keys: {list(body.keys())}")
-
-        chat_data = body.get("chat", {})
-        payload = chat_data.get("messagePayload", {})
-        message = payload.get("message", {})
+        message = body.get("message", {})
         sender = message.get("sender", {})
-
-        message_text = message.get("text", "").strip()
         attachments = message.get("attachment", [])
+        message_text = message.get("text", "").strip()
         sender_email = sender.get("email", "").lower()
         full_name = sender.get("displayName", "there")
         first_name = full_name.split()[0] if full_name else "there"
-
-        logger.info(f"Extracted - Email: {sender_email}, Name: {first_name}, Text: '{message_text}'")
-        logger.info(f"Processing message from {sender_email}: '{message_text}'")
-        logger.info(f"Current user state: {user_states.get(sender_email)}")
-
         state = user_states.get(sender_email)
 
-        if not message_text:
-            logger.warning("Empty message text received")
-            return {"text": "I didn't receive any text. Please try again."}
-
-        if not sender_email:
-            logger.warning("No sender email found")
-            return {"text": "I couldn't identify who sent this message. Please try again."}
+        logger.info(f"From: {sender_email}, Text: {message_text}, State: {state}")
 
         if attachments:
             try:
@@ -188,8 +173,14 @@ async def chat_webhook(request: Request):
                 user_states[sender_email] = "awaiting_q1"
                 return {"text": "1️⃣ Does this quote require any upfront payments?"}
             except Exception as e:
-                logger.error(f"Error handling attachment: {e}")
+                logger.error(f"Attachment error: {e}")
                 return {"text": f"⚠️ Error handling attachment: {str(e)}"}
+
+        if not message_text:
+            return {"text": "I didn't receive any text. Please try again."}
+
+        if not sender_email:
+            return {"text": "I couldn't identify who sent this message. Please try again."}
 
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text

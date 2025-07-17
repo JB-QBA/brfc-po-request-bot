@@ -136,11 +136,16 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes):
         message["from"] = SENDER_EMAIL
         message["subject"] = subject
 
-        mime = MIMEBase("application", "octet-stream")
-        mime.set_payload(file_bytes)
-        encoders.encode_base64(mime)
-        mime.add_header("Content-Disposition", f"attachment; filename={filename}")
-        message.attach(mime)
+        from mimetypes import guess_type
+
+mime_type, _ = guess_type(filename)
+maintype, subtype = (mime_type or "application/octet-stream").split("/")
+
+mime = MIMEBase(maintype, subtype)
+mime.set_payload(file_bytes)
+encoders.encode_base64(mime)
+mime.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+message.attach(mime)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         service.users().messages().send(userId="me", body={"raw": raw}).execute()

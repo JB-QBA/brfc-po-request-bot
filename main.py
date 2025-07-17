@@ -1,4 +1,4 @@
-# P2P 3000 Bot – Dual Attachment Support (Corrected)
+# P2P 3000 Bot – Final Attachment Fix
 
 from fastapi import FastAPI, Request
 import os
@@ -6,6 +6,7 @@ import json
 import base64
 import gspread
 import requests
+import mimetypes
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from email.mime.base import MIMEBase
@@ -127,7 +128,7 @@ def get_actuals_for_account(account: str, department: str):
 def post_to_shared_space(text: str):
     get_chat_service().spaces().messages().create(parent=CHAT_SPACE_ID, body={"text": text}).execute()
 
-# === EMAIL SENDER ===
+# === EMAIL SENDER (with correct MIME) ===
 def send_quote_email(to_emails, subject, body, filename, file_bytes):
     try:
         service = get_gmail_service()
@@ -136,16 +137,15 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes):
         message["from"] = SENDER_EMAIL
         message["subject"] = subject
 
-        from mimetypes import guess_type
+        # Guess correct MIME type
+        mime_type, _ = mimetypes.guess_type(filename)
+        maintype, subtype = (mime_type or "application/octet-stream").split("/")
 
-mime_type, _ = guess_type(filename)
-maintype, subtype = (mime_type or "application/octet-stream").split("/")
-
-mime = MIMEBase(maintype, subtype)
-mime.set_payload(file_bytes)
-encoders.encode_base64(mime)
-mime.add_header("Content-Disposition", f'attachment; filename="{filename}"')
-message.attach(mime)
+        mime = MIMEBase(maintype, subtype)
+        mime.set_payload(file_bytes)
+        encoders.encode_base64(mime)
+        mime.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        message.attach(mime)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         service.users().messages().send(userId="me", body={"raw": raw}).execute()
@@ -181,14 +181,12 @@ async def chat_webhook(request: Request):
         first_name = sender.get("displayName", "there").split()[0]
         state = user_states.get(sender_email)
 
-        # Reset flow
         if message_text.lower() in reset_triggers:
             user_states.pop(sender_email, None)
             for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
                 user_states.pop(k)
             return {"text": f"✅ No problem {first_name}, your PO flow has been reset. Just say hi to begin again."}
 
-        # Handle file uploads
         if attachments:
             try:
                 att = attachments[0]
@@ -205,7 +203,7 @@ async def chat_webhook(request: Request):
                     raise ValueError("File could not be loaded")
 
                 send_quote_email(
-                    ["botes.jp@gmail.com"],  # 👈 testing address
+                    ["botes.jp@gmail.com"],  # test address
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name}",
                     filename,
@@ -220,7 +218,6 @@ async def chat_webhook(request: Request):
                 logger.error(f"Attachment error: {e}")
                 return {"text": f"⚠️ Error handling attachment: {str(e)}"}
 
-        # Main flow
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text
             user_states[sender_email] = "awaiting_q2"

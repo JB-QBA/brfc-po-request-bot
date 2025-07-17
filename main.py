@@ -84,17 +84,27 @@ def get_account_tracking_reference(cost_item: str, department: str):
     rows = sheet.get_all_values()
     headers = rows[0]
     data_rows = rows[1:]
-    indices = {
-        "Account": headers.index("Account"),
-        "Department": headers.index("Department"),
-        "Cost Item": headers.index("Cost Item"),
-        "Tracking": headers.index("Tracking"),
-        "Finance Reference": headers.index("Finance Reference"),
-        "Total": headers.index("Total")
-    }
+
+    account_idx = headers.index("Account") if "Account" in headers else 0
+    dept_idx = headers.index("Department") if "Department" in headers else 1
+    item_idx = headers.index("Cost Item") if "Cost Item" in headers else 3
+    tracking_idx = headers.index("Tracking") if "Tracking" in headers else 4
+    ref_idx = headers.index("Finance Reference") if "Finance Reference" in headers else 5
+    total_idx = headers.index("Total") if "Total" in headers else 17
+
     for row in data_rows:
-        if row[indices["Cost Item"]].strip().lower() == cost_item.lower() and row[indices["Department"]].strip().lower() == department.lower():
-            return row[indices["Account"]], row[indices["Tracking"]], row[indices["Finance Reference"]], float(row[indices["Total"]].replace(",", "") or "0")
+        if len(row) > max(account_idx, dept_idx, item_idx, tracking_idx, ref_idx, total_idx):
+            if row[item_idx].strip().lower() == cost_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                account = row[account_idx].strip()
+                tracking = row[tracking_idx].strip()
+                reference = row[ref_idx].strip()
+                total_str = row[total_idx].replace(",", "") if row[total_idx] else "0"
+                try:
+                    total_budget = float(total_str)
+                except:
+                    total_budget = 0
+                return account, tracking, reference, total_budget
+
     return None, None, None, 0
 
 def get_total_budget_for_account(account: str, department: str):

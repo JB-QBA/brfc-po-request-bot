@@ -27,7 +27,7 @@ from email.mime.text import MIMEText
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USERNAME = "p2p.x@bahrainrfc.com"
-SMTP_PASSWORD = os.getenv("BRFC@Finance$2020")  # Must be set in environment
+SMTP_PASSWORD = os.getenv("paii cvgg oolf gwnh")  # Must be set in environment
 
 # Logging
 logging.basicConfig(level=logging.INFO)

@@ -27,6 +27,17 @@ from email.mime.text import MIMEText
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USERNAME = "p2p.x@bahrainrfc.com"
+SMTP_PASSWORD = os.getenv("paiicvggoolfgwnh")  # Must be set in environment
+
+
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from email.mime.text import MIMEText
+
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USERNAME = "p2p.x@bahrainrfc.com"
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -162,21 +173,27 @@ def post_to_shared_space(text: str):
 
 # === EMAIL SENDER (ApprovalMax-compatible) - FIXED FILE FORMAT ===
 
+
 def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
     try:
         import os
         smtp_password = os.getenv("SMTP_PASSWORD")
         logger.info(f"SMTP_PASSWORD loaded dynamically: {'yes' if smtp_password else 'no'}, length: {len(smtp_password) if smtp_password else 0}")
 
+        file_path = f"/tmp/{filename}"
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+        logger.info(f"File written to disk at {file_path}")
+
         msg = MIMEMultipart()
         msg["From"] = SMTP_USERNAME
         msg["To"] = ", ".join(to_emails)
         msg["Subject"] = subject
-
         msg.attach(MIMEText(body, "plain"))
 
-        part = MIMEApplication(file_bytes, Name=filename)
-        part['Content-Disposition'] = f'attachment; filename="{filename}"'
+        with open(file_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=filename)
+        part["Content-Disposition"] = f'attachment; filename="{filename}"'
         msg.attach(part)
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
@@ -291,7 +308,7 @@ async def chat_webhook(request: Request):
 
                 # Send email with properly formatted file using original content type
                 send_quote_email(
-                    ["p2p.x@bahrainrfc.com"],
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}\nOriginal content type: {content_type}",
                     filename,

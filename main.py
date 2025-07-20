@@ -7,7 +7,6 @@ import base64
 import gspread
 import requests
 import mimetypes
-import hashlib
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from email.mime.multipart import MIMEMultipart

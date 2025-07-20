@@ -27,7 +27,6 @@ from email.mime.text import MIMEText
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USERNAME = "p2p.x@bahrainrfc.com"
-SMTP_PASSWORD = os.getenv("paiicvggoolfgwnh")  # Must be set in environment
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -165,23 +164,24 @@ def post_to_shared_space(text: str):
 
 def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
     try:
+        import os
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        logger.info(f"SMTP_PASSWORD loaded dynamically: {'yes' if smtp_password else 'no'}, length: {len(smtp_password) if smtp_password else 0}")
+
         msg = MIMEMultipart()
         msg["From"] = SMTP_USERNAME
         msg["To"] = ", ".join(to_emails)
         msg["Subject"] = subject
 
-        # Add plain text body
         msg.attach(MIMEText(body, "plain"))
 
-        # Attach the file exactly as received
         part = MIMEApplication(file_bytes, Name=filename)
         part['Content-Disposition'] = f'attachment; filename="{filename}"'
         msg.attach(part)
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
-            logger.info(f"SMTP_PASSWORD loaded: {'yes' if SMTP_PASSWORD else 'no'}, length: {len(SMTP_PASSWORD) if SMTP_PASSWORD else 0}")
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.login(SMTP_USERNAME, smtp_password)
             server.sendmail(SMTP_USERNAME, to_emails, msg.as_string())
 
         logger.info(f"📧 SMTP Email sent successfully to {to_emails} with file: {filename}")

@@ -150,9 +150,9 @@ def post_to_shared_space(text: str):
         logger.error(f"Error posting to shared space: {e}")
 
 # === EMAIL SENDER (ApprovalMax-compatible) - FIXED FILE FORMAT ===
-def send_quote_email(to_emails, subject, body, filename, file_bytes):
+def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
     """
-    Fixed version that preserves original file format by properly detecting MIME type
+    Fixed version that preserves original file format using attachment metadata
     """
     try:
         service = get_gmail_service()
@@ -165,38 +165,40 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes):
         # Add plain text body
         message.attach(MIMEText(body, "plain"))
 
-        # Detect the MIME type based on filename
-        mime_type, _ = mimetypes.guess_type(filename)
-        
-        if mime_type is None:
-            # Fallback to application/octet-stream for unknown file types
-            mime_type = "application/octet-stream"
-        
-        logger.info(f"Detected MIME type: {mime_type} for file: {filename}")
-        
-        # Split mime_type into main type and subtype
-        main_type, sub_type = mime_type.split('/', 1)
-        
-        if main_type == 'application':
-            # Use MIMEApplication for application files (PDF, Word, Excel, etc.)
-            attachment = MIMEApplication(file_bytes, _subtype=sub_type, Name=filename)
+        # Use content_type from attachment metadata if available, otherwise guess
+        if content_type:
+            mime_type = content_type
+            logger.info(f"Using attachment content type: {mime_type} for file: {filename}")
         else:
-            # For other types, use MIMEBase with proper encoding
-            attachment = MIMEBase(main_type, sub_type)
-            attachment.set_payload(file_bytes)
-            encoders.encode_base64(attachment)
+            mime_type, _ = mimetypes.guess_type(filename)
+            if mime_type is None:
+                mime_type = "application/octet-stream"
+            logger.info(f"Guessed MIME type: {mime_type} for file: {filename}")
         
-        # Add the Content-Disposition header to make it an attachment
-        attachment.add_header(
-            'Content-Disposition', 
-            f'attachment; filename="{filename}"'
-        )
-        
-        # Add Content-Type header with proper filename
-        attachment.add_header(
-            'Content-Type',
-            f'{mime_type}; name="{filename}"'
-        )
+        # Create attachment with proper MIME type
+        if mime_type.startswith('text/'):
+            # For text files, decode and re-encode properly
+            try:
+                text_content = file_bytes.decode('utf-8')
+                attachment = MIMEText(text_content, _subtype=mime_type.split('/')[-1])
+                attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            except:
+                # Fallback to binary if decoding fails
+                attachment = MIMEApplication(file_bytes, Name=filename)
+                attachment.add_header('Content-Type', mime_type)
+                attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+        else:
+            # For binary files, use MIMEApplication with specific subtype
+            try:
+                main_type, sub_type = mime_type.split('/', 1)
+                attachment = MIMEApplication(file_bytes, _subtype=sub_type, Name=filename)
+            except:
+                # Fallback to generic application
+                attachment = MIMEApplication(file_bytes, Name=filename)
+            
+            # Set proper headers
+            attachment.add_header('Content-Type', f'{mime_type}; name="{filename}"')
+            attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
         
         message.attach(attachment)
 
@@ -281,13 +283,26 @@ async def chat_webhook(request: Request):
             try:
                 att = attachments[0]
                 filename = att.get("name", "quote.pdf")
+                content_type = att.get("contentType", None)  # Get original content type
                 file_bytes = None
 
                 logger.info(f"Processing attachment: {filename}")
+                logger.info(f"Original content type: {content_type}")
+                logger.info(f"Full attachment data: {json.dumps(att, indent=2)}")
 
                 if "driveDataRef" in att:
                     file_id = att["driveDataRef"]["driveFileId"]
                     file_bytes = download_drive_file(file_id)
+                    # For Drive files, try to get content type from Drive API
+                    if not content_type:
+                        try:
+                            drive_service = get_drive_service()
+                            file_metadata = drive_service.files().get(fileId=file_id, fields="mimeType,name").execute()
+                            content_type = file_metadata.get("mimeType")
+                            logger.info(f"Drive file content type: {content_type}")
+                        except Exception as e:
+                            logger.warning(f"Could not get Drive file metadata: {e}")
+                            
                 elif "attachmentDataRef" in att:
                     file_bytes = download_direct_file(att)
 
@@ -296,16 +311,17 @@ async def chat_webhook(request: Request):
 
                 logger.info(f"File loaded successfully: {filename} ({len(file_bytes)} bytes)")
 
-                # Send email with properly formatted file
+                # Send email with properly formatted file using original content type
                 send_quote_email(
                     ["botes.jp@gmail.com"],  # ✅ test address
                     "PO Quote Submission",
-                    f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}",
+                    f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}\nOriginal content type: {content_type}",
                     filename,
-                    file_bytes
+                    file_bytes,
+                    content_type  # Pass the original content type
                 )
 
-                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename}")
+                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} ({content_type})")
                 user_states[sender_email] = "awaiting_q1"
                 return {"text": f"✅ File received and forwarded: {filename}\n\n1️⃣ Does this quote require any upfront payments?"}
 

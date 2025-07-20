@@ -313,7 +313,7 @@ async def chat_webhook(request: Request):
 
                 # Send email with properly formatted file using original content type
                 send_quote_email(
-                    ["botes.jp@gmail.com"],  # ✅ test address
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],  # ✅ test address
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}\nOriginal content type: {content_type}",
                     filename,

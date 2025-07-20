@@ -180,6 +180,7 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
+            logger.info(f"SMTP_PASSWORD loaded: {'yes' if SMTP_PASSWORD else 'no'}, length: {len(SMTP_PASSWORD) if SMTP_PASSWORD else 0}")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(SMTP_USERNAME, to_emails, msg.as_string())
 

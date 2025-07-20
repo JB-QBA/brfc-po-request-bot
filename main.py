@@ -180,7 +180,9 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
         smtp_password = os.getenv("SMTP_PASSWORD")
         logger.info(f"SMTP_PASSWORD loaded dynamically: {'yes' if smtp_password else 'no'}, length: {len(smtp_password) if smtp_password else 0}")
 
-        file_path = f"/tmp/{filename}"
+        import re
+        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        file_path = f"/tmp/{safe_filename}"
         with open(file_path, "wb") as f:
             f.write(file_bytes)
         logger.info(f"File written to disk at {file_path}")

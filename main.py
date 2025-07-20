@@ -199,7 +199,6 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
             # Set proper headers
             attachment.add_header('Content-Type', f'{mime_type}; name="{filename}"')
             attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-            attachment.add_header('Content-Transfer-Encoding', 'base64')
         
         message.attach(attachment)
 
@@ -314,7 +313,7 @@ async def chat_webhook(request: Request):
 
                 # Send email with properly formatted file using original content type
                 send_quote_email(
-                    ["botes.jp@gmail.com"],
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}\nOriginal content type: {content_type}",
                     filename,

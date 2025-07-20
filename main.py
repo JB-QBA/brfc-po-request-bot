@@ -201,6 +201,7 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
             attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
         
         message.attach(attachment)
+        logger.info(f"MIME attachment hash (SHA256): {hashlib.sha256(attachment.as_bytes()).hexdigest()}")
 
         # Convert to raw format for Gmail API
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -311,9 +312,13 @@ async def chat_webhook(request: Request):
 
                 logger.info(f"File loaded successfully: {filename} ({len(file_bytes)} bytes)")
 
+                # Log SHA256 hash of the original file for diagnostics
+                import hashlib
+                logger.info(f"Original file hash (SHA256): {hashlib.sha256(file_bytes).hexdigest()}")
+
                 # Send email with properly formatted file using original content type
                 send_quote_email(
-                    ["p2p.x@bahrainrfc.com"], #bahrain-rugby-football-club-po@mail.approvalmax.com
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
                     "PO Quote Submission",
                     f"Quote uploaded by {first_name} ({sender_email})\nFilename: {filename}\nOriginal content type: {content_type}",
                     filename,

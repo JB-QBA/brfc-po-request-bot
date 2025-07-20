@@ -18,6 +18,17 @@ from email import encoders
 from google.auth.transport.requests import Request as GoogleAuthRequest
 import logging
 
+
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from email.mime.text import MIMEText
+
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USERNAME = "p2p.x@bahrainrfc.com"
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")  # Must be set in environment
+
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -151,74 +162,34 @@ def post_to_shared_space(text: str):
         logger.error(f"Error posting to shared space: {e}")
 
 # === EMAIL SENDER (ApprovalMax-compatible) - FIXED FILE FORMAT ===
-def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
-    """
-    Fixed version that preserves original file format using attachment metadata
-    """
-    try:
-        service = get_gmail_service()
 
-        message = MIMEMultipart()
-        message["To"] = ", ".join(to_emails)
-        message["From"] = SENDER_EMAIL
-        message["Subject"] = subject
+def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = SMTP_USERNAME
+        msg["To"] = ", ".join(to_emails)
+        msg["Subject"] = subject
 
         # Add plain text body
-        message.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(body, "plain"))
 
-        # Use content_type from attachment metadata if available, otherwise guess
-        if content_type:
-            mime_type = content_type
-            logger.info(f"Using attachment content type: {mime_type} for file: {filename}")
-        else:
-            mime_type, _ = mimetypes.guess_type(filename)
-            if mime_type is None:
-                mime_type = "application/octet-stream"
-            logger.info(f"Guessed MIME type: {mime_type} for file: {filename}")
-        
-        # Create attachment with proper MIME type
-        if mime_type.startswith('text/'):
-            # For text files, decode and re-encode properly
-            try:
-                text_content = file_bytes.decode('utf-8')
-                attachment = MIMEText(text_content, _subtype=mime_type.split('/')[-1])
-                attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-            except:
-                # Fallback to binary if decoding fails
-                attachment = MIMEApplication(file_bytes, Name=filename)
-                attachment.add_header('Content-Type', mime_type)
-                attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-        else:
-            # For binary files, use MIMEApplication with specific subtype
-            try:
-                main_type, sub_type = mime_type.split('/', 1)
-                attachment = MIMEApplication(file_bytes, _subtype=sub_type, Name=filename)
-            except:
-                # Fallback to generic application
-                attachment = MIMEApplication(file_bytes, Name=filename)
-            
-            # Set proper headers
-            attachment.add_header('Content-Type', f'{mime_type}; name="{filename}"')
-            attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-        
-        message.attach(attachment)
-        logger.info(f"MIME attachment hash (SHA256): {hashlib.sha256(attachment.as_bytes()).hexdigest()}")
+        # Attach the file exactly as received
+        part = MIMEApplication(file_bytes, Name=filename)
+        part['Content-Disposition'] = f'attachment; filename="{filename}"'
+        msg.attach(part)
 
-        # Convert to raw format for Gmail API
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        
-        # Send the email
-        result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
-        logger.info(f"📧 Email sent successfully with message ID: {result.get('id')}")
-        print(f"📧 Email sent correctly - File: {filename} ({mime_type})")
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(SMTP_USERNAME, to_emails, msg.as_string())
+
+        logger.info(f"📧 SMTP Email sent successfully to {to_emails} with file: {filename}")
+        print(f"📧 Email sent correctly via SMTP - File: {filename}")
 
     except Exception as e:
-        logger.error(f"❌ Email failed: {e}")
-        print(f"❌ Email failed: {e}")
-        # Re-raise the exception so calling code can handle it
+        logger.error(f"❌ SMTP Email failed: {e}")
+        print(f"❌ SMTP Email failed: {e}")
         raise
-
-# === FILE HANDLER - Enhanced with better error handling ===
 def download_direct_file(attachment_ref: dict) -> bytes:
     """
     Enhanced file download with better error handling

@@ -1,4 +1,4 @@
-# P2P 3000 Bot – ENHANCED VERSION with File Format Preservation
+# P2P 3000 Bot – ENHANCED VERSION with File Format Preservation and Financial Year Support
 
 from fastapi import FastAPI, Request
 import os
@@ -92,214 +92,10 @@ def get_gmail_service():
 def get_drive_service():
     return build("drive", "v3", credentials=get_creds(["https://www.googleapis.com/auth/drive.readonly"]))
 
-# === NEXT YEAR OPEX SHEET HELPERS ===
-def get_ny_cost_items_for_department(department: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
-    except Exception as e:
-        logger.error(f"Error getting NY cost items: {e}")
-        return []
-
-def get_ny_account_tracking_reference(cost_item: str, department: str):
-    try:
-        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME)
-        rows = sheet.get_all_values()
-        headers = rows[0]  # Headers still in row 1 (index 0)
-        data_rows = rows[2:]  # Data now starts from row 3 (index 2) - skipping row 2
-
-        account_idx = headers.index("Account") if "Account" in headers else 0
-        dept_idx = headers.index("Department") if "Department" in headers else 1
-        item_idx = headers.index("Cost Item") if "Cost Item" in headers else 3
-        tracking_idx = headers.index("Tracking") if "Tracking" in headers else 4
-        ref_idx = headers.index("Finance Reference") if "Finance Reference" in headers else 5
-        total_idx = headers.index("Total") if "Total" in headers else 17
-
-        for row in data_rows:
-            if len(row) > max(account_idx, dept_idx, item_idx, tracking_idx, ref_idx, total_idx):
-                if row[item_idx].strip().lower() == cost_item.lower() and row[dept_idx].strip().lower() == department.lower():
-                    account = row[account_idx].strip()
-                    tracking = row[tracking_idx].strip()
-                    reference = row[ref_idx].strip()
-                    total_str = row[total_idx].replace(",", "") if row[total_idx] else "0"
-                    try:
-                        total_budget = float(total_str)
-                    except:
-                        total_budget = 0
-                    return account, tracking, reference, total_budget
-
-        return None, None, None, 0
-    except Exception as e:
-        logger.error(f"Error getting NY account tracking reference: {e}")
-        return None, None, None, 0
-
-def get_ny_total_budget_for_account(account: str, department: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        return sum(float(row[17].replace(",", "")) for row in rows if len(row) >= 18 and row[0].strip().lower() == account.lower() and row[1].strip().lower() == department.lower())
-    except Exception as e:
-        logger.error(f"Error getting NY total budget: {e}")
-        return 0
-
-# === NEXT YEAR CAPEX SHEET HELPERS ===
-def get_ny_capital_items_for_department(department: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F)
-    except Exception as e:
-        logger.error(f"Error getting NY capital items: {e}")
-        return []
-
-def get_ny_capex_account_tracking_reference(asset_item: str, department: str):
-    try:
-        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME)
-        rows = sheet.get_all_values()
-        headers = rows[1]  # Headers in row 2 (index 1) for CAPEX
-        data_rows = rows[2:]  # Data starts from row 3 (index 2)
-
-        # Column mappings for CAPEX: B=Asset Item, C=Cost, F=Department, K=Projects/Events/Budgets, X=Xero Account
-        asset_idx = 1  # Column B (Asset Item)
-        cost_idx = 2   # Column C (Cost)
-        dept_idx = 5   # Column F (Department)
-        project_idx = 10  # Column K (Projects/Events/Budgets reference)
-        account_idx = 23  # Column X (Xero account name)
-
-        for row in data_rows:
-            if len(row) > max(asset_idx, cost_idx, dept_idx, project_idx, account_idx):
-                if row[asset_idx].strip().lower() == asset_item.lower() and row[dept_idx].strip().lower() == department.lower():
-                    account = row[account_idx].strip()
-                    project_ref = row[project_idx].strip()
-                    cost_str = row[cost_idx].replace(",", "") if row[cost_idx] else "0"
-                    try:
-                        item_cost = float(cost_str)
-                    except:
-                        item_cost = 0
-                    return account, project_ref, item_cost
-
-        return None, None, 0
-    except Exception as e:
-        logger.error(f"Error getting NY CAPEX account tracking reference: {e}")
-        return None, None, 0
-
-def get_ny_capex_total_budget_for_account(account: str, project_ref: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        total = 0
-        for row in rows:
-            if len(row) > 23:  # Ensure row has enough columns
-                if row[23].strip().lower() == account.lower() and row[10].strip().lower() == project_ref.lower():  # Column X (account) and Column K (project ref)
-                    try:
-                        cost_value = row[2].replace(",", "") if row[2] else "0"  # Column C (cost)
-                        total += float(cost_value)
-                    except:
-                        pass
-        return total
-    except Exception as e:
-        logger.error(f"Error getting NY CAPEX total budget: {e}")
-        return 0
-def get_capital_items_for_department(department: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F)
-    except Exception as e:
-        logger.error(f"Error getting capital items: {e}")
-        return []
-
-def get_capex_account_tracking_reference(asset_item: str, department: str):
-    try:
-        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME)
-        rows = sheet.get_all_values()
-        headers = rows[1]  # Headers in row 2 (index 1) for CAPEX
-        data_rows = rows[2:]  # Data starts from row 3 (index 2)
-
-        # Column mappings for CAPEX: B=Asset Item, C=Cost, F=Department, K=Projects/Events/Budgets, X=Xero Account
-        asset_idx = 1  # Column B (Asset Item)
-        cost_idx = 2   # Column C (Cost)
-        dept_idx = 5   # Column F (Department)
-        project_idx = 10  # Column K (Projects/Events/Budgets reference)
-        account_idx = 23  # Column X (Xero account name)
-
-        for row in data_rows:
-            if len(row) > max(asset_idx, cost_idx, dept_idx, project_idx, account_idx):
-                if row[asset_idx].strip().lower() == asset_item.lower() and row[dept_idx].strip().lower() == department.lower():
-                    account = row[account_idx].strip()
-                    project_ref = row[project_idx].strip()
-                    cost_str = row[cost_idx].replace(",", "") if row[cost_idx] else "0"
-                    try:
-                        item_cost = float(cost_str)
-                    except:
-                        item_cost = 0
-                    return account, project_ref, item_cost
-
-        return None, None, 0
-    except Exception as e:
-        logger.error(f"Error getting CAPEX account tracking reference: {e}")
-        return None, None, 0
-
-def get_capex_total_budget_for_account(account: str, project_ref: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
-        total = 0
-        for row in rows:
-            if len(row) > 23:  # Ensure row has enough columns
-                if row[23].strip().lower() == account.lower() and row[10].strip().lower() == project_ref.lower():  # Column X (account) and Column K (project ref)
-                    try:
-                        cost_value = row[2].replace(",", "") if row[2] else "0"  # Column C (cost)
-                        total += float(cost_value)
-                    except:
-                        pass
-        return total
-    except Exception as e:
-        logger.error(f"Error getting CAPEX total budget: {e}")
-        return 0
-
-def get_capex_actuals_for_account(account: str, project_ref: str):
-    try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(XERO_TAB_NAME).get_all_values()[3:]  # Same Xero logic
-        total = 0.0
-        for row in rows:
-            if len(row) >= 16:  # Ensure we have enough columns (up to column P)
-                # Match account name (column B, index 1), department (column O, index 14), and project reference (column P, index 15)
-                account_match = row[1].strip().lower() == account.lower()
-                project_match = row[15].strip().lower() == project_ref.lower()  # Column P (Projects/Events/Budgets)
-                
-                if account_match and project_match:
-                    try:
-                        # Clean the value thoroughly for negative amounts and whitespace
-                        val = row[10].strip()  # Amount column (assuming same as OPEX)
-                        
-                        # Remove various types of whitespace and special characters
-                        val = val.replace("\u00a0", "")  # Non-breaking space
-                        val = val.replace("\u202f", "")  # Narrow no-break space
-                        val = val.replace("\u2009", "")  # Thin space
-                        val = val.replace("\u2008", "")  # Punctuation space
-                        val = val.replace(" ", "")       # Regular space
-                        val = val.replace("\t", "")      # Tab
-                        val = val.replace("\n", "")      # Newline
-                        val = val.replace("\r", "")      # Carriage return
-                        
-                        # Handle different minus signs
-                        val = val.replace("−", "-")      # Unicode minus
-                        val = val.replace("–", "-")      # En dash
-                        val = val.replace("—", "-")      # Em dash
-                        val = val.replace(",", "")       # Comma thousands separator
-                        
-                        # Convert to float if not empty
-                        if val and val != "-":
-                            total += float(val)
-                            
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Could not parse value '{row[10]}' for CAPEX actuals: {e}")
-                        pass
-        
-        logger.info(f"CAPEX actuals total for account '{account}' and project '{project_ref}': {total}")
-        return total
-    except Exception as e:
-        logger.error(f"Error getting CAPEX actuals: {e}")
-        return 0
+# === CURRENT YEAR OPEX SHEET HELPERS ===
 def get_cost_items_for_department(department: str):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]
         return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
     except Exception as e:
         logger.error(f"Error getting cost items: {e}")
@@ -309,8 +105,8 @@ def get_account_tracking_reference(cost_item: str, department: str):
     try:
         sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME)
         rows = sheet.get_all_values()
-        headers = rows[0]  # Headers still in row 1 (index 0)
-        data_rows = rows[2:]  # Data now starts from row 3 (index 2) - skipping row 2
+        headers = rows[0]
+        data_rows = rows[2:]
 
         account_idx = headers.index("Account") if "Account" in headers else 0
         dept_idx = headers.index("Department") if "Department" in headers else 1
@@ -339,7 +135,7 @@ def get_account_tracking_reference(cost_item: str, department: str):
 
 def get_total_budget_for_account(account: str, department: str):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]
         return sum(float(row[17].replace(",", "")) for row in rows if len(row) >= 18 and row[0].strip().lower() == account.lower() and row[1].strip().lower() == department.lower())
     except Exception as e:
         logger.error(f"Error getting total budget: {e}")
@@ -361,6 +157,195 @@ def get_actuals_for_account(account: str, department: str):
         logger.error(f"Error getting actuals: {e}")
         return 0
 
+# === CURRENT YEAR CAPEX SHEET HELPERS ===
+def get_capital_items_for_department(department: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]
+        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))
+    except Exception as e:
+        logger.error(f"Error getting capital items: {e}")
+        return []
+
+def get_capex_account_tracking_reference(asset_item: str, department: str):
+    try:
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME)
+        rows = sheet.get_all_values()
+        headers = rows[1]
+        data_rows = rows[2:]
+
+        asset_idx = 1
+        cost_idx = 2
+        dept_idx = 5
+        project_idx = 10
+        account_idx = 23
+
+        for row in data_rows:
+            if len(row) > max(asset_idx, cost_idx, dept_idx, project_idx, account_idx):
+                if row[asset_idx].strip().lower() == asset_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                    account = row[account_idx].strip()
+                    project_ref = row[project_idx].strip()
+                    cost_str = row[cost_idx].replace(",", "") if row[cost_idx] else "0"
+                    try:
+                        item_cost = float(cost_str)
+                    except:
+                        item_cost = 0
+                    return account, project_ref, item_cost
+
+        return None, None, 0
+    except Exception as e:
+        logger.error(f"Error getting CAPEX account tracking reference: {e}")
+        return None, None, 0
+
+def get_capex_total_budget_for_account(account: str, project_ref: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]
+        total = 0
+        for row in rows:
+            if len(row) > 23:
+                if row[23].strip().lower() == account.lower() and row[10].strip().lower() == project_ref.lower():
+                    try:
+                        cost_value = row[2].replace(",", "") if row[2] else "0"
+                        total += float(cost_value)
+                    except:
+                        pass
+        return total
+    except Exception as e:
+        logger.error(f"Error getting CAPEX total budget: {e}")
+        return 0
+
+def get_capex_actuals_for_account(account: str, project_ref: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(XERO_TAB_NAME).get_all_values()[3:]
+        total = 0.0
+        for row in rows:
+            if len(row) >= 16:
+                account_match = row[1].strip().lower() == account.lower()
+                project_match = row[15].strip().lower() == project_ref.lower()
+                
+                if account_match and project_match:
+                    try:
+                        val = row[10].strip()
+                        val = val.replace("\u00a0", "").replace("\u202f", "").replace("\u2009", "").replace("\u2008", "")
+                        val = val.replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "")
+                        val = val.replace("−", "-").replace("–", "-").replace("—", "-").replace(",", "")
+                        
+                        if val and val != "-":
+                            total += float(val)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse value '{row[10]}' for CAPEX actuals: {e}")
+                        pass
+        
+        logger.info(f"CAPEX actuals total for account '{account}' and project '{project_ref}': {total}")
+        return total
+    except Exception as e:
+        logger.error(f"Error getting CAPEX actuals: {e}")
+        return 0
+
+# === NEXT YEAR OPEX SHEET HELPERS ===
+def get_ny_cost_items_for_department(department: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME).get_all_values()[2:]
+        return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
+    except Exception as e:
+        logger.error(f"Error getting NY cost items: {e}")
+        return []
+
+def get_ny_account_tracking_reference(cost_item: str, department: str):
+    try:
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME)
+        rows = sheet.get_all_values()
+        headers = rows[0]
+        data_rows = rows[2:]
+
+        account_idx = headers.index("Account") if "Account" in headers else 0
+        dept_idx = headers.index("Department") if "Department" in headers else 1
+        item_idx = headers.index("Cost Item") if "Cost Item" in headers else 3
+        tracking_idx = headers.index("Tracking") if "Tracking" in headers else 4
+        ref_idx = headers.index("Finance Reference") if "Finance Reference" in headers else 5
+        total_idx = headers.index("Total") if "Total" in headers else 17
+
+        for row in data_rows:
+            if len(row) > max(account_idx, dept_idx, item_idx, tracking_idx, ref_idx, total_idx):
+                if row[item_idx].strip().lower() == cost_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                    account = row[account_idx].strip()
+                    tracking = row[tracking_idx].strip()
+                    reference = row[ref_idx].strip()
+                    total_str = row[total_idx].replace(",", "") if row[total_idx] else "0"
+                    try:
+                        total_budget = float(total_str)
+                    except:
+                        total_budget = 0
+                    return account, tracking, reference, total_budget
+
+        return None, None, None, 0
+    except Exception as e:
+        logger.error(f"Error getting NY account tracking reference: {e}")
+        return None, None, None, 0
+
+def get_ny_total_budget_for_account(account: str, department: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_OPEX_TAB_NAME).get_all_values()[2:]
+        return sum(float(row[17].replace(",", "")) for row in rows if len(row) >= 18 and row[0].strip().lower() == account.lower() and row[1].strip().lower() == department.lower())
+    except Exception as e:
+        logger.error(f"Error getting NY total budget: {e}")
+        return 0
+
+# === NEXT YEAR CAPEX SHEET HELPERS ===
+def get_ny_capital_items_for_department(department: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME).get_all_values()[2:]
+        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))
+    except Exception as e:
+        logger.error(f"Error getting NY capital items: {e}")
+        return []
+
+def get_ny_capex_account_tracking_reference(asset_item: str, department: str):
+    try:
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME)
+        rows = sheet.get_all_values()
+        headers = rows[1]
+        data_rows = rows[2:]
+
+        asset_idx = 1
+        cost_idx = 2
+        dept_idx = 5
+        project_idx = 10
+        account_idx = 23
+
+        for row in data_rows:
+            if len(row) > max(asset_idx, cost_idx, dept_idx, project_idx, account_idx):
+                if row[asset_idx].strip().lower() == asset_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                    account = row[account_idx].strip()
+                    project_ref = row[project_idx].strip()
+                    cost_str = row[cost_idx].replace(",", "") if row[cost_idx] else "0"
+                    try:
+                        item_cost = float(cost_str)
+                    except:
+                        item_cost = 0
+                    return account, project_ref, item_cost
+
+        return None, None, 0
+    except Exception as e:
+        logger.error(f"Error getting NY CAPEX account tracking reference: {e}")
+        return None, None, 0
+
+def get_ny_capex_total_budget_for_account(account: str, project_ref: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(NEXT_YEAR_CAPEX_TAB_NAME).get_all_values()[2:]
+        total = 0
+        for row in rows:
+            if len(row) > 23:
+                if row[23].strip().lower() == account.lower() and row[10].strip().lower() == project_ref.lower():
+                    try:
+                        cost_value = row[2].replace(",", "") if row[2] else "0"
+                        total += float(cost_value)
+                    except:
+                        pass
+        return total
+    except Exception as e:
+        logger.error(f"Error getting NY CAPEX total budget: {e}")
+        return 0
+
 def post_to_shared_space(text: str):
     try:
         get_chat_service().spaces().messages().create(parent=CHAT_SPACE_ID, body={"text": text}).execute()
@@ -377,7 +362,7 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
         smtp_password = os.getenv("SMTP_PASSWORD")
         logger.info(f"SMTP_PASSWORD loaded dynamically: {'yes' if smtp_password else 'no'}, length: {len(smtp_password) if smtp_password else 0}")
 
-        # Clean filename while preserving extension - ENHANCED for ApprovalMax
+        # Clean filename and add extension if needed - ENHANCED for ApprovalMax
         import re
         
         # First, detect the file type if no extension exists
@@ -626,320 +611,4 @@ async def chat_webhook(request: Request):
                     f"Quote uploaded by {first_name} ({sender_email})\n"
                     f"Original filename: {filename}\n"
                     f"Processed filename: (will be auto-detected with proper extension)\n"
-                    f"Original content type: {original_content_type}\n"
-                    f"Detected content type: {detected_content_type}\n"
-                    f"Final content type: {final_content_type}\n"
-                    f"File size: {len(file_bytes)} bytes\n"
-                    f"File hash: {hashlib.sha256(file_bytes).hexdigest()}",
-                    filename,
-                    file_bytes,
-                    final_content_type,
-                    sender_name=first_name
-                )
-
-                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type})")
-                user_states[sender_email] = "awaiting_q1"
-                return {"text": f"✅ File received and forwarded: {filename}\n📎 Processed as: {safe_filename if 'safe_filename' in locals() else filename}\n\n1️⃣ Does this quote require any upfront payments?"}
-
-            except Exception as e:
-                logger.error(f"Attachment error: {e}")
-                return {"text": f"⚠️ Error handling attachment '{filename}': {str(e)}\n\nPlease try uploading the file again or contact support."}
-
-        # TEXT FLOW
-        if state == "awaiting_q1":
-            user_states[f"{sender_email}_q1"] = message_text
-            user_states[sender_email] = "awaiting_q2"
-            return {"text": "2️⃣ Is this a foreign payment that requires GSA approval?"}
-
-        if state == "awaiting_q2":
-            user_states[f"{sender_email}_q2"] = message_text
-            user_states[sender_email] = "awaiting_comments"
-            return {"text": "3️⃣ Any comments you'd like to pass along to the PO team?"}
-
-        if state == "awaiting_comments":
-            q1 = user_states.get(f"{sender_email}_q1", "N/A")
-            q2 = user_states.get(f"{sender_email}_q2", "N/A")
-            comments = message_text
-            cost_item = user_states.get(f"{sender_email}_cost_item")
-            account = user_states.get(f"{sender_email}_account")
-            department = user_states.get(f"{sender_email}_department")
-            reference = user_states.get(f"{sender_email}_reference")
-            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
-            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
-            
-            year_text = "NEXT YEAR" if financial_year == "next" else "CURRENT YEAR"
-
-            summary = (
-                f"📋 *Finance Responses Received*\n"
-                f"*From:* {first_name}\n"
-                f"*Financial Year:* {year_text}\n"
-                f"*Type:* {request_type}\n"
-                f"*Cost Item:* {cost_item}\n"
-                f"*Account:* {account}\n"
-                f"*Department:* {department}\n"
-                f"*Reference:* {reference}\n"
-                f"1️⃣ Upfront Payment Required: {q1}\n"
-                f"2️⃣ Foreign Payment / GSA Approval: {q2}\n"
-                f"3️⃣ Comments to PO Team: {comments}"
-            )
-
-            post_to_shared_space(summary)
-            
-            # Clear user state
-            for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
-                user_states.pop(k)
-            user_states[sender_email] = None
-            
-            return {"text": f"Thanks {first_name}, you're all done ✅\n\n📞 **Pro tip:** Feel free to follow up with the procurement team to make sure everything was received okay!"}
-
-        if any(message_text.lower().startswith(g) for g in greeting_triggers):
-            if sender_email not in special_users and sender_email not in department_managers:
-                return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact an administrator to set up your access."}
-            
-            # Check if it's July or August for financial year question
-            from datetime import datetime
-            current_month = datetime.now().month
-            
-            if current_month in [7, 8]:  # July and August
-                user_states[sender_email] = "awaiting_financial_year"
-                return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n📅 **Current Financial Year** (type 'current')\n📅 **Next Financial Year** (type 'next')\n\nPlease type either 'current' or 'next' to continue."}
-            else:
-                # Outside July/August, default to current year and go straight to OPEX/CAPEX
-                user_states[f"{sender_email}_financial_year"] = "current"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
-
-        # Handle financial year selection (July & August only)
-        if state == "awaiting_financial_year":
-            if message_text.lower() in ["current", "current year", "cy"]:
-                user_states[f"{sender_email}_financial_year"] = "current"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"✅ Current Financial Year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
-            elif message_text.lower() in ["next", "next year", "ny"]:
-                user_states[f"{sender_email}_financial_year"] = "next"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"✅ Next Financial Year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
-            else:
-                return {"text": f"Please type either 'current' for Current Financial Year or 'next' for Next Financial Year."}
-
-        # Handle OPEX/CAPEX selection
-        if state == "awaiting_opex_capex":
-            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
-            
-            if message_text.upper() in ["OPEX", "OPERATIONAL"]:
-                user_states[f"{sender_email}_request_type"] = "OPEX"
-                if sender_email in special_users:
-                    user_states[sender_email] = "awaiting_department"
-                    year_text = "Next Year" if financial_year == "next" else "Current Year"
-                    return {"text": f"Great! {year_text} OPEX request confirmed. 💼\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
-                elif sender_email in department_managers:
-                    dept = department_managers[sender_email]
-                    # Choose the right function based on financial year
-                    items = get_ny_cost_items_for_department(dept) if financial_year == "next" else get_cost_items_for_department(dept)
-                    if not items:
-                        year_text = "next year" if financial_year == "next" else "current year"
-                        return {"text": f"I couldn't find any {year_text} cost items for {dept}. Please contact support."}
-                    user_states[sender_email] = "awaiting_cost_item"
-                    user_states[f"{sender_email}_department"] = dept
-                    year_text = "Next Year" if financial_year == "next" else "Current Year"
-                    return {"text": f"Great! {year_text} OPEX request for {dept} confirmed. 💼\n\nHere are the cost items:\n- " + "\n- ".join(items)}
-                else:
-                    return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
-                    
-            elif message_text.upper() in ["CAPEX", "CAPITAL"]:
-                user_states[f"{sender_email}_request_type"] = "CAPEX"
-                if sender_email in special_users:
-                    user_states[sender_email] = "awaiting_department"
-                    year_text = "Next Year" if financial_year == "next" else "Current Year"
-                    return {"text": f"Great! {year_text} CAPEX request confirmed. 🏗️\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
-                elif sender_email in department_managers:
-                    dept = department_managers[sender_email]
-                    # Choose the right function based on financial year
-                    items = get_ny_capital_items_for_department(dept) if financial_year == "next" else get_capital_items_for_department(dept)
-                    if not items:
-                        year_text = "next year" if financial_year == "next" else "current year"
-                        return {"text": f"I couldn't find any {year_text} capital items for {dept}. Please contact support."}
-                    user_states[sender_email] = "awaiting_cost_item"
-                    user_states[f"{sender_email}_department"] = dept
-                    year_text = "Next Year" if financial_year == "next" else "Current Year"
-                    return {"text": f"Great! {year_text} CAPEX request for {dept} confirmed. 🏗️\n\nHere are the capital items:\n- " + "\n- ".join(items)}
-                else:
-                    return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
-            else:
-                return {"text": f"Please type either 'OPEX' for Operational Expenditures or 'CAPEX' for Capital Expenditures."}
-        # Handle department selection (for special users)
-        if state == "awaiting_department":
-            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
-            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
-            
-            if message_text.title() in all_departments:
-                dept = message_text.title()
-                year_text = "Next Year" if financial_year == "next" else "Current Year"
-                
-                if request_type == "CAPEX":
-                    # Choose the right function based on financial year
-                    items = get_ny_capital_items_for_department(dept) if financial_year == "next" else get_capital_items_for_department(dept)
-                    if not items:
-                        year_text_lower = "next year" if financial_year == "next" else "current year"
-                        return {"text": f"No {year_text_lower} capital items found for {dept}. Please contact support."}
-                    user_states[sender_email] = "awaiting_cost_item"
-                    user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Thanks {first_name}. {year_text} capital items for {dept}:\n- " + "\n- ".join(items)}
-                else:  # OPEX
-                    # Choose the right function based on financial year
-                    items = get_ny_cost_items_for_department(dept) if financial_year == "next" else get_cost_items_for_department(dept)
-                    if not items:
-                        year_text_lower = "next year" if financial_year == "next" else "current year"
-                        return {"text": f"No {year_text_lower} cost items found for {dept}. Please contact support."}
-                    user_states[sender_email] = "awaiting_cost_item"
-                    user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Thanks {first_name}. {year_text} cost items for {dept}:\n- " + "\n- ".join(items)}
-            else:
-                return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
-
-        # Handle cost/capital item selection
-        if state == "awaiting_cost_item":
-            dept = user_states.get(f"{sender_email}_department")
-            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
-            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
-            
-            if request_type == "CAPEX":
-                if financial_year == "next":
-                    # Next year CAPEX - no actuals
-                    account, project_ref, item_cost = get_ny_capex_account_tracking_reference(message_text, dept)
-                    if account:
-                        acct_total = get_ny_capex_total_budget_for_account(account, project_ref)
-                        user_states.update({
-                            sender_email: "awaiting_file",
-                            f"{sender_email}_cost_item": message_text.title(),
-                            f"{sender_email}_account": account,
-                            f"{sender_email}_reference": project_ref,
-                            f"{sender_email}_department": dept
-                        })
-                        return {"text": (
-                            f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                            f"🏗️ **Next Year CAPEX Summary:**\n"
-                            f"📊 Cost of this item: {int(item_cost):,}\n"
-                            f"📊 Total budget for '{project_ref}': {int(acct_total):,}\n"
-                            f"📊 YTD actuals: N/A (Next Year)\n\n"
-                            "📎 Please upload the quote file directly here in Chat."
-                        )}
-                    else:
-                        return {"text": f"Capital item not found under {dept}. Please try again or type the exact item name."}
-                else:
-                    # Current year CAPEX - with actuals
-                    account, project_ref, item_cost = get_capex_account_tracking_reference(message_text, dept)
-                    if account:
-                        acct_total = get_capex_total_budget_for_account(account, project_ref)
-                        actuals = get_capex_actuals_for_account(account, project_ref)
-                        user_states.update({
-                            sender_email: "awaiting_file",
-                            f"{sender_email}_cost_item": message_text.title(),
-                            f"{sender_email}_account": account,
-                            f"{sender_email}_reference": project_ref,
-                            f"{sender_email}_department": dept
-                        })
-                        return {"text": (
-                            f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                            f"🏗️ **Current Year CAPEX Summary:**\n"
-                            f"📊 Cost of this item: {int(item_cost):,}\n"
-                            f"📊 Total budget for '{project_ref}': {int(acct_total):,}\n"
-                            f"📊 YTD actuals: {int(actuals):,}\n\n"
-                            "📎 Please upload the quote file directly here in Chat."
-                        )}
-                    else:
-                        return {"text": f"Capital item not found under {dept}. Please try again or type the exact item name."}
-            else:  # OPEX
-                if financial_year == "next":
-                    # Next year OPEX - no actuals
-                    account, tracking, reference, item_total = get_ny_account_tracking_reference(message_text, dept)
-                    if account:
-                        acct_total = get_ny_total_budget_for_account(account, dept)
-                        user_states.update({
-                            sender_email: "awaiting_file",
-                            f"{sender_email}_cost_item": message_text.title(),
-                            f"{sender_email}_account": account,
-                            f"{sender_email}_reference": reference,
-                            f"{sender_email}_department": dept
-                        })
-                        return {"text": (
-                            f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                            f"💼 **Next Year OPEX Summary:**\n"
-                            f"📊 Budgeted for item: {int(item_total):,}\n"
-                            f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                            f"📊 YTD actuals: N/A (Next Year)\n\n"
-                            "📎 Please upload the quote file directly here in Chat."
-                        )}
-                    else:
-                        return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
-                else:
-                    # Current year OPEX - with actuals
-                    account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept)
-                    if account:
-                        acct_total = get_total_budget_for_account(account, dept)
-                        actuals = get_actuals_for_account(account, dept)
-                        user_states.update({
-                            sender_email: "awaiting_file",
-                            f"{sender_email}_cost_item": message_text.title(),
-                            f"{sender_email}_account": account,
-                            f"{sender_email}_reference": reference,
-                            f"{sender_email}_department": dept
-                        })
-                        return {"text": (
-                            f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                            f"💼 **Current Year OPEX Summary:**\n"
-                            f"📊 Budgeted for item: {int(item_total):,}\n"
-                            f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                            f"📊 YTD actuals: {int(actuals):,}\n\n"
-                            "📎 Please upload the quote file directly here in Chat."
-                        )}
-                    else:
-                        return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
-                        f"{sender_email}_department": dept
-                    })
-                    return {"text": (
-                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                        f"🏗️ **CAPEX Summary:**\n"
-                        f"📊 Cost of this item: {int(item_cost):,}\n"
-                        f"📊 Total budget for '{project_ref}': {int(acct_total):,}\n"
-                        f"📊 YTD actuals: {int(actuals):,}\n\n"
-                        "📎 Please upload the quote file directly here in Chat."
-                    )}
-                else:
-                    return {"text": f"Capital item not found under {dept}. Please try again or type the exact item name."}
-            else:  # OPEX
-                account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept)
-                if account:
-                    acct_total = get_total_budget_for_account(account, dept)
-                    actuals = get_actuals_for_account(account, dept)
-                    user_states.update({
-                        sender_email: "awaiting_file",
-                        f"{sender_email}_cost_item": message_text.title(),
-                        f"{sender_email}_account": account,
-                        f"{sender_email}_reference": reference,
-                        f"{sender_email}_department": dept
-                    })
-                    return {"text": (
-                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                        f"💼 **OPEX Summary:**\n"
-                        f"📊 Budgeted for item: {int(item_total):,}\n"
-                        f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                        f"📊 YTD actuals: {int(actuals):,}\n\n"
-                        "📎 Please upload the quote file directly here in Chat."
-                    )}
-                else:
-                    return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
-
-        return {"text": "🤖 I'm not sure how to help. Say 'hi' to start or 'restart' to reset."}
-
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return {"text": f"❌ Unexpected error: {str(e)}. Please try again or contact support."}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-@app.get("/")
-async def root():
-    return {"message": "P2P 3000 Enhanced is running"}
+                    f"Original content type: {original_content_type}\n

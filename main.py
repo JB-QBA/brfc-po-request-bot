@@ -152,16 +152,41 @@ def get_capex_actuals_for_account(account: str, project_ref: str):
         rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(XERO_TAB_NAME).get_all_values()[3:]  # Same Xero logic
         total = 0.0
         for row in rows:
-            if len(row) >= 15:
-                # For CAPEX, we need to match both account name and project reference from Xero data
-                # Assuming Xero has account in column B (index 1) and project reference somewhere - you may need to adjust this
-                if row[1].strip().lower() == account.lower():  # Match account name
-                    # You might need to add logic here to also match project reference if it's stored in Xero
+            if len(row) >= 16:  # Ensure we have enough columns (up to column P)
+                # Match account name (column B, index 1), department (column O, index 14), and project reference (column P, index 15)
+                account_match = row[1].strip().lower() == account.lower()
+                project_match = row[15].strip().lower() == project_ref.lower()  # Column P (Projects/Events/Budgets)
+                
+                if account_match and project_match:
                     try:
-                        val = row[10].strip().replace("−", "-").replace("–", "-").replace(",", "").replace(" ", "")
-                        total += float(val)
-                    except:
+                        # Clean the value thoroughly for negative amounts and whitespace
+                        val = row[10].strip()  # Amount column (assuming same as OPEX)
+                        
+                        # Remove various types of whitespace and special characters
+                        val = val.replace("\u00a0", "")  # Non-breaking space
+                        val = val.replace("\u202f", "")  # Narrow no-break space
+                        val = val.replace("\u2009", "")  # Thin space
+                        val = val.replace("\u2008", "")  # Punctuation space
+                        val = val.replace(" ", "")       # Regular space
+                        val = val.replace("\t", "")      # Tab
+                        val = val.replace("\n", "")      # Newline
+                        val = val.replace("\r", "")      # Carriage return
+                        
+                        # Handle different minus signs
+                        val = val.replace("−", "-")      # Unicode minus
+                        val = val.replace("–", "-")      # En dash
+                        val = val.replace("—", "-")      # Em dash
+                        val = val.replace(",", "")       # Comma thousands separator
+                        
+                        # Convert to float if not empty
+                        if val and val != "-":
+                            total += float(val)
+                            
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse value '{row[10]}' for CAPEX actuals: {e}")
                         pass
+        
+        logger.info(f"CAPEX actuals total for account '{account}' and project '{project_ref}': {total}")
         return total
     except Exception as e:
         logger.error(f"Error getting CAPEX actuals: {e}")

@@ -39,6 +39,7 @@ user_states = {}
 SERVICE_ACCOUNT_FILE = "/etc/secrets/acoustic-agent-465113-s7-df3d0e19a05e.json"
 SPREADSHEET_ID = "1U19XSieDNaDGN0khJJ8vFaDG75DwdKjE53d6MWi0Nt8"
 SHEET_TAB_NAME = "CY_OPEX"
+CAPEX_TAB_NAME = "CY_CAPEX"
 XERO_TAB_NAME = "Xero"
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
@@ -89,7 +90,82 @@ def get_gmail_service():
 def get_drive_service():
     return build("drive", "v3", credentials=get_creds(["https://www.googleapis.com/auth/drive.readonly"]))
 
-# === SHEET HELPERS ===
+# === CAPEX SHEET HELPERS ===
+def get_capital_items_for_department(department: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
+        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F)
+    except Exception as e:
+        logger.error(f"Error getting capital items: {e}")
+        return []
+
+def get_capex_account_tracking_reference(asset_item: str, department: str):
+    try:
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME)
+        rows = sheet.get_all_values()
+        headers = rows[1]  # Headers in row 2 (index 1) for CAPEX
+        data_rows = rows[2:]  # Data starts from row 3 (index 2)
+
+        # Column mappings for CAPEX: B=Asset Item, C=Cost, F=Department, K=Projects/Events/Budgets, X=Xero Account
+        asset_idx = 1  # Column B (Asset Item)
+        cost_idx = 2   # Column C (Cost)
+        dept_idx = 5   # Column F (Department)
+        project_idx = 10  # Column K (Projects/Events/Budgets reference)
+        account_idx = 23  # Column X (Xero account name)
+
+        for row in data_rows:
+            if len(row) > max(asset_idx, cost_idx, dept_idx, project_idx, account_idx):
+                if row[asset_idx].strip().lower() == asset_item.lower() and row[dept_idx].strip().lower() == department.lower():
+                    account = row[account_idx].strip()
+                    project_ref = row[project_idx].strip()
+                    cost_str = row[cost_idx].replace(",", "") if row[cost_idx] else "0"
+                    try:
+                        item_cost = float(cost_str)
+                    except:
+                        item_cost = 0
+                    return account, project_ref, item_cost
+
+        return None, None, 0
+    except Exception as e:
+        logger.error(f"Error getting CAPEX account tracking reference: {e}")
+        return None, None, 0
+
+def get_capex_total_budget_for_account(account: str, project_ref: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
+        total = 0
+        for row in rows:
+            if len(row) > 23:  # Ensure row has enough columns
+                if row[23].strip().lower() == account.lower() and row[10].strip().lower() == project_ref.lower():  # Column X (account) and Column K (project ref)
+                    try:
+                        cost_value = row[2].replace(",", "") if row[2] else "0"  # Column C (cost)
+                        total += float(cost_value)
+                    except:
+                        pass
+        return total
+    except Exception as e:
+        logger.error(f"Error getting CAPEX total budget: {e}")
+        return 0
+
+def get_capex_actuals_for_account(account: str, project_ref: str):
+    try:
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(XERO_TAB_NAME).get_all_values()[3:]  # Same Xero logic
+        total = 0.0
+        for row in rows:
+            if len(row) >= 15:
+                # For CAPEX, we need to match both account name and project reference from Xero data
+                # Assuming Xero has account in column B (index 1) and project reference somewhere - you may need to adjust this
+                if row[1].strip().lower() == account.lower():  # Match account name
+                    # You might need to add logic here to also match project reference if it's stored in Xero
+                    try:
+                        val = row[10].strip().replace("−", "-").replace("–", "-").replace(",", "").replace(" ", "")
+                        total += float(val)
+                    except:
+                        pass
+        return total
+    except Exception as e:
+        logger.error(f"Error getting CAPEX actuals: {e}")
+        return 0
 def get_cost_items_for_department(department: str):
     try:
         rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
@@ -457,10 +533,12 @@ async def chat_webhook(request: Request):
             account = user_states.get(f"{sender_email}_account")
             department = user_states.get(f"{sender_email}_department")
             reference = user_states.get(f"{sender_email}_reference")
+            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
 
             summary = (
                 f"📋 *Finance Responses Received*\n"
                 f"*From:* {first_name}\n"
+                f"*Type:* {request_type}\n"
                 f"*Cost Item:* {cost_item}\n"
                 f"*Account:* {account}\n"
                 f"*Department:* {department}\n"
@@ -480,54 +558,117 @@ async def chat_webhook(request: Request):
             return {"text": f"Thanks {first_name}, you're all done ✅\n\n📞 **Pro tip:** Feel free to follow up with the procurement team to make sure everything was received okay!"}
 
         if any(message_text.lower().startswith(g) for g in greeting_triggers):
-            if sender_email in special_users:
-                user_states[sender_email] = "awaiting_department"
-                return {"text": f"Hi {first_name}, what department is this PO for?\nOptions: {', '.join(all_departments)}"}
-            elif sender_email in department_managers:
-                dept = department_managers[sender_email]
-                items = get_cost_items_for_department(dept)
-                if not items:
-                    return {"text": f"Hi {first_name}, I couldn't find any cost items for {dept}. Please contact support."}
-                user_states[sender_email] = "awaiting_cost_item"
-                user_states[f"{sender_email}_department"] = dept
-                return {"text": f"Hi {first_name},\nHere are the cost items for {dept}:\n- " + "\n- ".join(items)}
-            else:
+            if sender_email not in special_users and sender_email not in department_managers:
                 return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact an administrator to set up your access."}
+            
+            user_states[sender_email] = "awaiting_opex_capex"
+            return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
 
+        # Handle OPEX/CAPEX selection
+        if state == "awaiting_opex_capex":
+            if message_text.upper() in ["OPEX", "OPERATIONAL"]:
+                user_states[f"{sender_email}_request_type"] = "OPEX"
+                if sender_email in special_users:
+                    user_states[sender_email] = "awaiting_department"
+                    return {"text": f"Great! OPEX request confirmed. 💼\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
+                elif sender_email in department_managers:
+                    dept = department_managers[sender_email]
+                    items = get_cost_items_for_department(dept)
+                    if not items:
+                        return {"text": f"I couldn't find any cost items for {dept}. Please contact support."}
+                    user_states[sender_email] = "awaiting_cost_item"
+                    user_states[f"{sender_email}_department"] = dept
+                    return {"text": f"Great! OPEX request for {dept} confirmed. 💼\n\nHere are the cost items:\n- " + "\n- ".join(items)}
+                else:
+                    return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
+            elif message_text.upper() in ["CAPEX", "CAPITAL"]:
+                user_states[f"{sender_email}_request_type"] = "CAPEX"
+                if sender_email in special_users:
+                    user_states[sender_email] = "awaiting_department"
+                    return {"text": f"Great! CAPEX request confirmed. 🏗️\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
+                elif sender_email in department_managers:
+                    dept = department_managers[sender_email]
+                    items = get_capital_items_for_department(dept)
+                    if not items:
+                        return {"text": f"I couldn't find any capital items for {dept}. Please contact support."}
+                    user_states[sender_email] = "awaiting_cost_item"
+                    user_states[f"{sender_email}_department"] = dept
+                    return {"text": f"Great! CAPEX request for {dept} confirmed. 🏗️\n\nHere are the capital items:\n- " + "\n- ".join(items)}
+                else:
+                    return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
+            else:
+                return {"text": f"Please type either 'OPEX' for Operational Expenditures or 'CAPEX' for Capital Expenditures."}
+        # Handle department selection (for special users)
         if state == "awaiting_department":
+            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
             if message_text.title() in all_departments:
                 dept = message_text.title()
-                items = get_cost_items_for_department(dept)
-                if not items:
-                    return {"text": f"No cost items found for {dept}. Please contact support."}
-                user_states[sender_email] = "awaiting_cost_item"
-                user_states[f"{sender_email}_department"] = dept
-                return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
+                if request_type == "CAPEX":
+                    items = get_capital_items_for_department(dept)
+                    if not items:
+                        return {"text": f"No capital items found for {dept}. Please contact support."}
+                    user_states[sender_email] = "awaiting_cost_item"
+                    user_states[f"{sender_email}_department"] = dept
+                    return {"text": f"Thanks {first_name}. Capital items for {dept}:\n- " + "\n- ".join(items)}
+                else:  # OPEX
+                    items = get_cost_items_for_department(dept)
+                    if not items:
+                        return {"text": f"No cost items found for {dept}. Please contact support."}
+                    user_states[sender_email] = "awaiting_cost_item"
+                    user_states[f"{sender_email}_department"] = dept
+                    return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
             else:
                 return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
 
+        # Handle cost/capital item selection
         if state == "awaiting_cost_item":
             dept = user_states.get(f"{sender_email}_department")
-            account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept)
-            if account:
-                acct_total = get_total_budget_for_account(account, dept)
-                actuals = get_actuals_for_account(account, dept)
-                user_states.update({
-                    sender_email: "awaiting_file",
-                    f"{sender_email}_cost_item": message_text.title(),
-                    f"{sender_email}_account": account,
-                    f"{sender_email}_reference": reference,
-                    f"{sender_email}_department": dept
-                })
-                return {"text": (
-                    f"✅ You've selected: {message_text.title()} under {dept}\n\n"
-                    f"📊 Budgeted for item: {int(item_total):,}\n"
-                    f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                    f"📊 YTD actuals: {int(actuals):,}\n\n"
-                    "📎 Please upload the quote file directly here in Chat."
-                )}
-            else:
-                return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
+            request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+            
+            if request_type == "CAPEX":
+                account, project_ref, item_cost = get_capex_account_tracking_reference(message_text, dept)
+                if account:
+                    acct_total = get_capex_total_budget_for_account(account, project_ref)
+                    actuals = get_capex_actuals_for_account(account, project_ref)
+                    user_states.update({
+                        sender_email: "awaiting_file",
+                        f"{sender_email}_cost_item": message_text.title(),
+                        f"{sender_email}_account": account,
+                        f"{sender_email}_reference": project_ref,
+                        f"{sender_email}_department": dept
+                    })
+                    return {"text": (
+                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
+                        f"🏗️ **CAPEX Summary:**\n"
+                        f"📊 Cost of this item: {int(item_cost):,}\n"
+                        f"📊 Total budget for '{project_ref}': {int(acct_total):,}\n"
+                        f"📊 YTD actuals: {int(actuals):,}\n\n"
+                        "📎 Please upload the quote file directly here in Chat."
+                    )}
+                else:
+                    return {"text": f"Capital item not found under {dept}. Please try again or type the exact item name."}
+            else:  # OPEX
+                account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept)
+                if account:
+                    acct_total = get_total_budget_for_account(account, dept)
+                    actuals = get_actuals_for_account(account, dept)
+                    user_states.update({
+                        sender_email: "awaiting_file",
+                        f"{sender_email}_cost_item": message_text.title(),
+                        f"{sender_email}_account": account,
+                        f"{sender_email}_reference": reference,
+                        f"{sender_email}_department": dept
+                    })
+                    return {"text": (
+                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
+                        f"💼 **OPEX Summary:**\n"
+                        f"📊 Budgeted for item: {int(item_total):,}\n"
+                        f"📊 Account '{account}' budget: {int(acct_total):,}\n"
+                        f"📊 YTD actuals: {int(actuals):,}\n\n"
+                        "📎 Please upload the quote file directly here in Chat."
+                    )}
+                else:
+                    return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
 
         return {"text": "🤖 I'm not sure how to help. Say 'hi' to start or 'restart' to reset."}
 

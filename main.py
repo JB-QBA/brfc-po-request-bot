@@ -162,7 +162,7 @@ def post_to_shared_space(text: str):
 
 # === ENHANCED EMAIL SENDER (ApprovalMax-compatible) ===
 
-def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None):
+def send_quote_email(to_emails, subject, body, filename, file_bytes, content_type=None, sender_name=None):
     """
     Enhanced email sender with better file format preservation for ApprovalMax compatibility
     """
@@ -191,8 +191,21 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
             elif file_bytes.startswith(b'\xff\xd8\xff'):
                 detected_extension = ".jpg"
         
-        # Clean filename and add extension if needed
+        # Clean filename and add extension if needed - ENHANCED for meaningful names
         base_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        
+        # Generate a meaningful filename if the original is a Google Chat attachment ID
+        if (len(base_filename) > 50 or 
+            'spaces_' in base_filename or 
+            'messages_' in base_filename or 
+            'attachments_' in base_filename):
+            # Create a meaningful filename with sender name and timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Clean the sender name for filename use
+            clean_sender_name = re.sub(r'[^a-zA-Z0-9]', '', sender_name) if sender_name else "User"
+            base_filename = f"quote_{clean_sender_name}_{timestamp}"
+            
         if detected_extension and not base_filename.lower().endswith(detected_extension.lower()):
             safe_filename = base_filename + detected_extension
         else:
@@ -413,7 +426,8 @@ async def chat_webhook(request: Request):
                     f"File hash: {hashlib.sha256(file_bytes).hexdigest()}",
                     filename,
                     file_bytes,
-                    final_content_type
+                    final_content_type,
+                    sender_name=first_name
                 )
 
                 post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type})")

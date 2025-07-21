@@ -477,7 +477,7 @@ async def chat_webhook(request: Request):
                 user_states.pop(k)
             user_states[sender_email] = None
             
-            return {"text": f"Thanks {first_name}, you're all done ✅"}
+            return {"text": f"Thanks {first_name}, you're all done ✅\n\n📞 **Pro tip:** Feel free to follow up with the procurement team to make sure everything was received okay!"}
 
         if any(message_text.lower().startswith(g) for g in greeting_triggers):
             if sender_email in special_users:

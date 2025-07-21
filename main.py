@@ -170,9 +170,37 @@ def send_quote_email(to_emails, subject, body, filename, file_bytes, content_typ
         smtp_password = os.getenv("SMTP_PASSWORD")
         logger.info(f"SMTP_PASSWORD loaded dynamically: {'yes' if smtp_password else 'no'}, length: {len(smtp_password) if smtp_password else 0}")
 
-        # Clean filename while preserving extension
+        # Clean filename while preserving extension - ENHANCED for ApprovalMax
         import re
-        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        
+        # First, detect the file type if no extension exists
+        detected_extension = ""
+        if not '.' in filename or filename.split('.')[-1] not in ['pdf', 'xlsx', 'xls', 'docx', 'doc', 'png', 'jpg', 'jpeg']:
+            # Detect file type from content
+            if file_bytes.startswith(b'%PDF'):
+                detected_extension = ".pdf"
+            elif file_bytes.startswith(b'PK'):  # ZIP-based formats (xlsx, docx)
+                if content_type and 'spreadsheet' in content_type:
+                    detected_extension = ".xlsx"
+                elif content_type and 'wordprocessing' in content_type:
+                    detected_extension = ".docx"
+                else:
+                    detected_extension = ".xlsx"  # Default to xlsx for PK files
+            elif file_bytes.startswith(b'\x89PNG'):
+                detected_extension = ".png"
+            elif file_bytes.startswith(b'\xff\xd8\xff'):
+                detected_extension = ".jpg"
+        
+        # Clean filename and add extension if needed
+        base_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        if detected_extension and not base_filename.lower().endswith(detected_extension.lower()):
+            safe_filename = base_filename + detected_extension
+        else:
+            safe_filename = base_filename
+            
+        logger.info(f"Original filename: {filename}")
+        logger.info(f"Safe filename: {safe_filename}")
+        logger.info(f"Detected extension: {detected_extension}")
         
         # Ensure we have the correct file extension and MIME type
         if not content_type:
@@ -376,7 +404,8 @@ async def chat_webhook(request: Request):
                     ["p2p.x@bahrainrfc.com"],
                     "PO Quote Submission - Enhanced Format",
                     f"Quote uploaded by {first_name} ({sender_email})\n"
-                    f"Filename: {filename}\n"
+                    f"Original filename: {filename}\n"
+                    f"Processed filename: (will be auto-detected with proper extension)\n"
                     f"Original content type: {original_content_type}\n"
                     f"Detected content type: {detected_content_type}\n"
                     f"Final content type: {final_content_type}\n"
@@ -387,9 +416,9 @@ async def chat_webhook(request: Request):
                     final_content_type
                 )
 
-                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} ({final_content_type})")
+                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type})")
                 user_states[sender_email] = "awaiting_q1"
-                return {"text": f"✅ File received and forwarded: {filename}\n\n1️⃣ Does this quote require any upfront payments?"}
+                return {"text": f"✅ File received and forwarded: {filename}\n📎 Processed as: {safe_filename if 'safe_filename' in locals() else filename}\n\n1️⃣ Does this quote require any upfront payments?"}
 
             except Exception as e:
                 logger.error(f"Attachment error: {e}")

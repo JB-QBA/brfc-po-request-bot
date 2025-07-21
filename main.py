@@ -665,10 +665,14 @@ async def chat_webhook(request: Request):
             department = user_states.get(f"{sender_email}_department")
             reference = user_states.get(f"{sender_email}_reference")
             request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
+            
+            year_text = "NEXT YEAR" if financial_year == "next" else "CURRENT YEAR"
 
             summary = (
                 f"📋 *Finance Responses Received*\n"
                 f"*From:* {first_name}\n"
+                f"*Financial Year:* {year_text}\n"
                 f"*Type:* {request_type}\n"
                 f"*Cost Item:* {cost_item}\n"
                 f"*Account:* {account}\n"
@@ -890,7 +894,7 @@ async def chat_webhook(request: Request):
                             "📎 Please upload the quote file directly here in Chat."
                         )}
                     else:
-                        return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}_email}_reference": project_ref,
+                        return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
                         f"{sender_email}_department": dept
                     })
                     return {"text": (

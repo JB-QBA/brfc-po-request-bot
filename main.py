@@ -401,7 +401,7 @@ async def chat_webhook(request: Request):
 
                 # Send email with enhanced format preservation
                 send_quote_email(
-                    ["p2p.x@bahrainrfc.com"],
+                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
                     "PO Quote Submission - Enhanced Format",
                     f"Quote uploaded by {first_name} ({sender_email})\n"
                     f"Original filename: {filename}\n"

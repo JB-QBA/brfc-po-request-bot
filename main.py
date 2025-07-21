@@ -1,4 +1,4 @@
-# P2P 3000 Bot – ENHANCED VERSION with File Format Preservation
+# P2P 3000 Bot – ENHANCED VERSION with Financial Year Selection
 
 from fastapi import FastAPI, Request
 import os
@@ -8,6 +8,7 @@ import gspread
 import requests
 import mimetypes
 import hashlib
+from datetime import datetime
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from email.mime.multipart import MIMEMultipart
@@ -40,6 +41,8 @@ SERVICE_ACCOUNT_FILE = "/etc/secrets/acoustic-agent-465113-s7-df3d0e19a05e.json"
 SPREADSHEET_ID = "1U19XSieDNaDGN0khJJ8vFaDG75DwdKjE53d6MWi0Nt8"
 SHEET_TAB_NAME = "CY_OPEX"
 CAPEX_TAB_NAME = "CY_CAPEX"
+NY_OPEX_TAB_NAME = "NY_OPEX"
+NY_CAPEX_TAB_NAME = "NY_CAPEX"
 XERO_TAB_NAME = "Xero"
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
@@ -69,6 +72,19 @@ all_departments = [
 greeting_triggers = ["hi", "hello", "hey", "howzit", "salam", "hey cunt", "howdy"]
 reset_triggers = ["cancel", "restart", "start over"]
 
+# === UTILITY FUNCTIONS ===
+def is_july_or_august():
+    """Check if current month is July or August"""
+    current_month = datetime.now().month
+    return current_month in [7, 8]
+
+def get_sheet_tab_names(financial_year: str, request_type: str):
+    """Get the appropriate sheet tab names based on financial year and request type"""
+    if financial_year == "next":
+        return NY_OPEX_TAB_NAME if request_type == "OPEX" else NY_CAPEX_TAB_NAME
+    else:  # current year
+        return SHEET_TAB_NAME if request_type == "OPEX" else CAPEX_TAB_NAME
+
 # === GOOGLE AUTH ===
 def get_creds(scopes):
     return Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
@@ -90,18 +106,18 @@ def get_gmail_service():
 def get_drive_service():
     return build("drive", "v3", credentials=get_creds(["https://www.googleapis.com/auth/drive.readonly"]))
 
-# === CAPEX SHEET HELPERS ===
-def get_capital_items_for_department(department: str):
+# === ENHANCED CAPEX SHEET HELPERS ===
+def get_capital_items_for_department(department: str, sheet_tab: str = CAPEX_TAB_NAME):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Data starts at row 3
         return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F)
     except Exception as e:
-        logger.error(f"Error getting capital items: {e}")
+        logger.error(f"Error getting capital items from {sheet_tab}: {e}")
         return []
 
-def get_capex_account_tracking_reference(asset_item: str, department: str):
+def get_capex_account_tracking_reference(asset_item: str, department: str, sheet_tab: str = CAPEX_TAB_NAME):
     try:
-        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME)
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab)
         rows = sheet.get_all_values()
         headers = rows[1]  # Headers in row 2 (index 1) for CAPEX
         data_rows = rows[2:]  # Data starts from row 3 (index 2)
@@ -127,12 +143,12 @@ def get_capex_account_tracking_reference(asset_item: str, department: str):
 
         return None, None, 0
     except Exception as e:
-        logger.error(f"Error getting CAPEX account tracking reference: {e}")
+        logger.error(f"Error getting CAPEX account tracking reference from {sheet_tab}: {e}")
         return None, None, 0
 
-def get_capex_total_budget_for_account(account: str, project_ref: str):
+def get_capex_total_budget_for_account(account: str, project_ref: str, sheet_tab: str = CAPEX_TAB_NAME):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(CAPEX_TAB_NAME).get_all_values()[2:]  # Data starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Data starts at row 3
         total = 0
         for row in rows:
             if len(row) > 23:  # Ensure row has enough columns
@@ -144,7 +160,7 @@ def get_capex_total_budget_for_account(account: str, project_ref: str):
                         pass
         return total
     except Exception as e:
-        logger.error(f"Error getting CAPEX total budget: {e}")
+        logger.error(f"Error getting CAPEX total budget from {sheet_tab}: {e}")
         return 0
 
 def get_capex_actuals_for_account(account: str, project_ref: str):
@@ -191,17 +207,19 @@ def get_capex_actuals_for_account(account: str, project_ref: str):
     except Exception as e:
         logger.error(f"Error getting CAPEX actuals: {e}")
         return 0
-def get_cost_items_for_department(department: str):
+
+# === ENHANCED OPEX SHEET HELPERS ===
+def get_cost_items_for_department(department: str, sheet_tab: str = SHEET_TAB_NAME):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
         return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
     except Exception as e:
-        logger.error(f"Error getting cost items: {e}")
+        logger.error(f"Error getting cost items from {sheet_tab}: {e}")
         return []
 
-def get_account_tracking_reference(cost_item: str, department: str):
+def get_account_tracking_reference(cost_item: str, department: str, sheet_tab: str = SHEET_TAB_NAME):
     try:
-        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME)
+        sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab)
         rows = sheet.get_all_values()
         headers = rows[0]  # Headers still in row 1 (index 0)
         data_rows = rows[2:]  # Data now starts from row 3 (index 2) - skipping row 2
@@ -228,15 +246,15 @@ def get_account_tracking_reference(cost_item: str, department: str):
 
         return None, None, None, 0
     except Exception as e:
-        logger.error(f"Error getting account tracking reference: {e}")
+        logger.error(f"Error getting account tracking reference from {sheet_tab}: {e}")
         return None, None, None, 0
 
-def get_total_budget_for_account(account: str, department: str):
+def get_total_budget_for_account(account: str, department: str, sheet_tab: str = SHEET_TAB_NAME):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
         return sum(float(row[17].replace(",", "")) for row in rows if len(row) >= 18 and row[0].strip().lower() == account.lower() and row[1].strip().lower() == department.lower())
     except Exception as e:
-        logger.error(f"Error getting total budget: {e}")
+        logger.error(f"Error getting total budget from {sheet_tab}: {e}")
         return 0
 
 def get_actuals_for_account(account: str, department: str):
@@ -531,7 +549,12 @@ async def chat_webhook(request: Request):
                     sender_name=first_name
                 )
 
-                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type})")
+                # Get financial year and request type for shared space notification
+                financial_year = user_states.get(f"{sender_email}_financial_year", "current")
+                request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+                fy_text = "🔥 **NEXT YEAR REQUEST** 🔥" if financial_year == "next" else ""
+                
+                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type}) {fy_text}")
                 user_states[sender_email] = "awaiting_q1"
                 return {"text": f"✅ File received and forwarded: {filename}\n📎 Processed as: {safe_filename if 'safe_filename' in locals() else filename}\n\n1️⃣ Does this quote require any upfront payments?"}
 
@@ -559,11 +582,16 @@ async def chat_webhook(request: Request):
             department = user_states.get(f"{sender_email}_department")
             reference = user_states.get(f"{sender_email}_reference")
             request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
+
+            # Highlight next year requests for procurement team
+            fy_notification = "🔥 **NEXT YEAR REQUEST - Please note this is for the upcoming financial year** 🔥\n" if financial_year == "next" else ""
 
             summary = (
                 f"📋 *Finance Responses Received*\n"
+                f"{fy_notification}"
                 f"*From:* {first_name}\n"
-                f"*Type:* {request_type}\n"
+                f"*Type:* {request_type} ({financial_year.title()} FY)\n"
                 f"*Cost Item:* {cost_item}\n"
                 f"*Account:* {account}\n"
                 f"*Department:* {department}\n"
@@ -582,79 +610,125 @@ async def chat_webhook(request: Request):
             
             return {"text": f"Thanks {first_name}, you're all done ✅\n\n📞 **Pro tip:** Feel free to follow up with the procurement team to make sure everything was received okay!"}
 
+        # GREETING AND FINANCIAL YEAR SELECTION
         if any(message_text.lower().startswith(g) for g in greeting_triggers):
             if sender_email not in special_users and sender_email not in department_managers:
                 return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact an administrator to set up your access."}
             
-            user_states[sender_email] = "awaiting_opex_capex"
-            return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+            # Check if it's July or August - if so, ask about financial year
+            if is_july_or_august():
+                user_states[sender_email] = "awaiting_financial_year"
+                return {"text": f"Hi {first_name}! 👋\n\nWhich financial year is this request for?\n\n📅 **Current** financial year (type 'current')\n📅 **Next** financial year (type 'next')\n\nPlease type either 'current' or 'next' to continue."}
+            else:
+                # Outside July/August, skip financial year question and default to current
+                user_states[f"{sender_email}_financial_year"] = "current"
+                user_states[sender_email] = "awaiting_opex_capex"
+                return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+
+        # Handle financial year selection (only in July/August)
+        if state == "awaiting_financial_year":
+            if message_text.lower() in ["current", "current year", "this year"]:
+                user_states[f"{sender_email}_financial_year"] = "current"
+                user_states[sender_email] = "awaiting_opex_capex"
+                return {"text": f"✅ Current financial year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+            elif message_text.lower() in ["next", "next year", "upcoming"]:
+                user_states[f"{sender_email}_financial_year"] = "next"
+                user_states[sender_email] = "awaiting_opex_capex"
+                return {"text": f"✅ Next financial year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+            else:
+                return {"text": f"Please type either 'current' for this financial year or 'next' for the upcoming financial year."}
 
         # Handle OPEX/CAPEX selection
         if state == "awaiting_opex_capex":
+            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
+            
             if message_text.upper() in ["OPEX", "OPERATIONAL"]:
                 user_states[f"{sender_email}_request_type"] = "OPEX"
                 if sender_email in special_users:
                     user_states[sender_email] = "awaiting_department"
-                    return {"text": f"Great! OPEX request confirmed. 💼\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Great! OPEX request confirmed{fy_text}. 💼\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
                 elif sender_email in department_managers:
                     dept = department_managers[sender_email]
-                    items = get_cost_items_for_department(dept)
+                    sheet_tab = get_sheet_tab_names(financial_year, "OPEX")
+                    items = get_cost_items_for_department(dept, sheet_tab)
                     if not items:
-                        return {"text": f"I couldn't find any cost items for {dept}. Please contact support."}
+                        return {"text": f"I couldn't find any cost items for {dept} in the {financial_year} financial year. Please contact support."}
                     user_states[sender_email] = "awaiting_cost_item"
                     user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Great! OPEX request for {dept} confirmed. 💼\n\nHere are the cost items:\n- " + "\n- ".join(items)}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Great! OPEX request for {dept} confirmed{fy_text}. 💼\n\nHere are the cost items:\n- " + "\n- ".join(items)}
                 else:
                     return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
             elif message_text.upper() in ["CAPEX", "CAPITAL"]:
                 user_states[f"{sender_email}_request_type"] = "CAPEX"
                 if sender_email in special_users:
                     user_states[sender_email] = "awaiting_department"
-                    return {"text": f"Great! CAPEX request confirmed. 🏗️\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Great! CAPEX request confirmed{fy_text}. 🏗️\n\nWhat department is this PO for?\nOptions: {', '.join(all_departments)}"}
                 elif sender_email in department_managers:
                     dept = department_managers[sender_email]
-                    items = get_capital_items_for_department(dept)
+                    sheet_tab = get_sheet_tab_names(financial_year, "CAPEX")
+                    items = get_capital_items_for_department(dept, sheet_tab)
                     if not items:
-                        return {"text": f"I couldn't find any capital items for {dept}. Please contact support."}
+                        return {"text": f"I couldn't find any capital items for {dept} in the {financial_year} financial year. Please contact support."}
                     user_states[sender_email] = "awaiting_cost_item"
                     user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Great! CAPEX request for {dept} confirmed. 🏗️\n\nHere are the capital items:\n- " + "\n- ".join(items)}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Great! CAPEX request for {dept} confirmed{fy_text}. 🏗️\n\nHere are the capital items:\n- " + "\n- ".join(items)}
                 else:
                     return {"text": f"I don't recognize your email address. Please contact an administrator to set up your access."}
             else:
                 return {"text": f"Please type either 'OPEX' for Operational Expenditures or 'CAPEX' for Capital Expenditures."}
+                
         # Handle department selection (for special users)
         if state == "awaiting_department":
+            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
             request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
             if message_text.title() in all_departments:
                 dept = message_text.title()
+                sheet_tab = get_sheet_tab_names(financial_year, request_type)
+                
                 if request_type == "CAPEX":
-                    items = get_capital_items_for_department(dept)
+                    items = get_capital_items_for_department(dept, sheet_tab)
                     if not items:
-                        return {"text": f"No capital items found for {dept}. Please contact support."}
+                        fy_text = f" in the {financial_year} financial year" if financial_year == "next" else ""
+                        return {"text": f"No capital items found for {dept}{fy_text}. Please contact support."}
                     user_states[sender_email] = "awaiting_cost_item"
                     user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Thanks {first_name}. Capital items for {dept}:\n- " + "\n- ".join(items)}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Thanks {first_name}. Capital items for {dept}{fy_text}:\n- " + "\n- ".join(items)}
                 else:  # OPEX
-                    items = get_cost_items_for_department(dept)
+                    items = get_cost_items_for_department(dept, sheet_tab)
                     if not items:
-                        return {"text": f"No cost items found for {dept}. Please contact support."}
+                        fy_text = f" in the {financial_year} financial year" if financial_year == "next" else ""
+                        return {"text": f"No cost items found for {dept}{fy_text}. Please contact support."}
                     user_states[sender_email] = "awaiting_cost_item"
                     user_states[f"{sender_email}_department"] = dept
-                    return {"text": f"Thanks {first_name}. Cost items for {dept}:\n- " + "\n- ".join(items)}
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
+                    return {"text": f"Thanks {first_name}. Cost items for {dept}{fy_text}:\n- " + "\n- ".join(items)}
             else:
                 return {"text": f"Department not recognized. Try one of: {', '.join(all_departments)}"}
 
         # Handle cost/capital item selection
         if state == "awaiting_cost_item":
             dept = user_states.get(f"{sender_email}_department")
+            financial_year = user_states.get(f"{sender_email}_financial_year", "current")
             request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+            sheet_tab = get_sheet_tab_names(financial_year, request_type)
             
             if request_type == "CAPEX":
-                account, project_ref, item_cost = get_capex_account_tracking_reference(message_text, dept)
+                account, project_ref, item_cost = get_capex_account_tracking_reference(message_text, dept, sheet_tab)
                 if account:
-                    acct_total = get_capex_total_budget_for_account(account, project_ref)
-                    actuals = get_capex_actuals_for_account(account, project_ref)
+                    acct_total = get_capex_total_budget_for_account(account, project_ref, sheet_tab)
+                    
+                    # Only show actuals for current year, N/A for next year
+                    if financial_year == "current":
+                        actuals = get_capex_actuals_for_account(account, project_ref)
+                        actuals_text = f"📊 YTD actuals: {int(actuals):,}"
+                    else:
+                        actuals_text = f"📊 YTD actuals: N/A (Next FY)"
+                    
                     user_states.update({
                         sender_email: "awaiting_file",
                         f"{sender_email}_cost_item": message_text.title(),
@@ -662,21 +736,31 @@ async def chat_webhook(request: Request):
                         f"{sender_email}_reference": project_ref,
                         f"{sender_email}_department": dept
                     })
+                    
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
                     return {"text": (
-                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
+                        f"✅ You've selected: {message_text.title()} under {dept}{fy_text}\n\n"
                         f"🏗️ **CAPEX Summary:**\n"
                         f"📊 Cost of this item: {int(item_cost):,}\n"
                         f"📊 Total budget for '{project_ref}': {int(acct_total):,}\n"
-                        f"📊 YTD actuals: {int(actuals):,}\n\n"
+                        f"{actuals_text}\n\n"
                         "📎 Please upload the quote file directly here in Chat."
                     )}
                 else:
-                    return {"text": f"Capital item not found under {dept}. Please try again or type the exact item name."}
+                    fy_text = f" for the {financial_year} financial year" if financial_year == "next" else ""
+                    return {"text": f"Capital item not found under {dept}{fy_text}. Please try again or type the exact item name."}
             else:  # OPEX
-                account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept)
+                account, tracking, reference, item_total = get_account_tracking_reference(message_text, dept, sheet_tab)
                 if account:
-                    acct_total = get_total_budget_for_account(account, dept)
-                    actuals = get_actuals_for_account(account, dept)
+                    acct_total = get_total_budget_for_account(account, dept, sheet_tab)
+                    
+                    # Only show actuals for current year, N/A for next year
+                    if financial_year == "current":
+                        actuals = get_actuals_for_account(account, dept)
+                        actuals_text = f"📊 YTD actuals: {int(actuals):,}"
+                    else:
+                        actuals_text = f"📊 YTD actuals: N/A (Next FY)"
+                    
                     user_states.update({
                         sender_email: "awaiting_file",
                         f"{sender_email}_cost_item": message_text.title(),
@@ -684,16 +768,19 @@ async def chat_webhook(request: Request):
                         f"{sender_email}_reference": reference,
                         f"{sender_email}_department": dept
                     })
+                    
+                    fy_text = f" ({financial_year.title()} FY)" if financial_year == "next" else ""
                     return {"text": (
-                        f"✅ You've selected: {message_text.title()} under {dept}\n\n"
+                        f"✅ You've selected: {message_text.title()} under {dept}{fy_text}\n\n"
                         f"💼 **OPEX Summary:**\n"
                         f"📊 Budgeted for item: {int(item_total):,}\n"
                         f"📊 Account '{account}' budget: {int(acct_total):,}\n"
-                        f"📊 YTD actuals: {int(actuals):,}\n\n"
+                        f"{actuals_text}\n\n"
                         "📎 Please upload the quote file directly here in Chat."
                     )}
                 else:
-                    return {"text": f"Cost item not found under {dept}. Please try again or type the exact item name."}
+                    fy_text = f" for the {financial_year} financial year" if financial_year == "next" else ""
+                    return {"text": f"Cost item not found under {dept}{fy_text}. Please try again or type the exact item name."}
 
         return {"text": "🤖 I'm not sure how to help. Say 'hi' to start or 'restart' to reset."}
 
@@ -707,4 +794,4 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return {"message": "P2P 3000 Enhanced is running"}
+    return {"message": "P2P 3000 Enhanced with Financial Year Selection is running"}

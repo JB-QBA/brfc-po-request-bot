@@ -38,7 +38,7 @@ user_states = {}
 # === CONFIG ===
 SERVICE_ACCOUNT_FILE = "/etc/secrets/acoustic-agent-465113-s7-df3d0e19a05e.json"
 SPREADSHEET_ID = "1U19XSieDNaDGN0khJJ8vFaDG75DwdKjE53d6MWi0Nt8"
-SHEET_TAB_NAME = "FY2025Budget"
+SHEET_TAB_NAME = "CY_OPEX"
 XERO_TAB_NAME = "Xero"
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
@@ -92,7 +92,7 @@ def get_drive_service():
 # === SHEET HELPERS ===
 def get_cost_items_for_department(department: str):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[1:]
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
         return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
     except Exception as e:
         logger.error(f"Error getting cost items: {e}")
@@ -102,8 +102,8 @@ def get_account_tracking_reference(cost_item: str, department: str):
     try:
         sheet = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME)
         rows = sheet.get_all_values()
-        headers = rows[0]
-        data_rows = rows[1:]
+        headers = rows[0]  # Headers still in row 1 (index 0)
+        data_rows = rows[2:]  # Data now starts from row 3 (index 2) - skipping row 2
 
         account_idx = headers.index("Account") if "Account" in headers else 0
         dept_idx = headers.index("Department") if "Department" in headers else 1
@@ -132,7 +132,7 @@ def get_account_tracking_reference(cost_item: str, department: str):
 
 def get_total_budget_for_account(account: str, department: str):
     try:
-        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[1:]
+        rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(SHEET_TAB_NAME).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
         return sum(float(row[17].replace(",", "")) for row in rows if len(row) >= 18 and row[0].strip().lower() == account.lower() and row[1].strip().lower() == department.lower())
     except Exception as e:
         logger.error(f"Error getting total budget: {e}")

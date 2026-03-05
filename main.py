@@ -262,8 +262,11 @@ def send_finance_request_email(ref_number: str, category: str, details: str, add
 def send_unbudgeted_email(ref_number: str, requester_name: str, requester_email: str,
                            manager_title: str, department: str, filename: str, file_bytes: bytes,
                            content_type: str = None):
-    """Send unbudgeted item email with attachment directly to Finance Manager"""
+    """Send unbudgeted item email with attachment directly to Finance Manager.
+    Uses same file extension detection as send_quote_email for proper format preservation."""
     try:
+        import re
+
         subject = f"[UNBUDGETED] {department} — {requester_name} — {ref_number}"
 
         body = (
@@ -278,19 +281,89 @@ def send_unbudgeted_email(ref_number: str, requester_name: str, requester_email:
             f"P2P 3000"
         )
 
+        # --- File extension detection (same logic as send_quote_email) ---
+        detected_extension = ""
+        if file_bytes:
+            if not '.' in filename or filename.split('.')[-1] not in ['pdf', 'xlsx', 'xls', 'docx', 'doc', 'png', 'jpg', 'jpeg']:
+                if file_bytes.startswith(b'%PDF'):
+                    detected_extension = ".pdf"
+                elif file_bytes.startswith(b'PK'):
+                    if content_type and 'spreadsheet' in content_type:
+                        detected_extension = ".xlsx"
+                    elif content_type and 'wordprocessing' in content_type:
+                        detected_extension = ".docx"
+                    else:
+                        detected_extension = ".xlsx"
+                elif file_bytes.startswith(b'\x89PNG'):
+                    detected_extension = ".png"
+                elif file_bytes.startswith(b'\xff\xd8\xff'):
+                    detected_extension = ".jpg"
+
+            # Clean filename for safe email attachment
+            base_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+
+            # Generate meaningful filename if original is a Google Chat attachment ID
+            if (len(base_filename) > 50 or
+                'spaces_' in base_filename or
+                'messages_' in base_filename or
+                'attachments_' in base_filename):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                clean_requester = re.sub(r'[^a-zA-Z0-9]', '', requester_name) if requester_name else "User"
+                base_filename = f"unbudgeted_{clean_requester}_{timestamp}"
+
+            if detected_extension and not base_filename.lower().endswith(detected_extension.lower()):
+                safe_filename = base_filename + detected_extension
+            else:
+                safe_filename = base_filename
+
+            # Determine proper content type
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(safe_filename)
+                if not content_type:
+                    ext = safe_filename.lower().split('.')[-1] if '.' in safe_filename else ''
+                    content_type_map = {
+                        'pdf': 'application/pdf',
+                        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        'xls': 'application/vnd.ms-excel',
+                        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        'doc': 'application/msword',
+                        'png': 'image/png',
+                        'jpg': 'image/jpeg',
+                        'jpeg': 'image/jpeg',
+                    }
+                    content_type = content_type_map.get(ext, 'application/octet-stream')
+
+            logger.info(f"Unbudgeted file - Original: {filename}, Safe: {safe_filename}, Type: {content_type}")
+        else:
+            safe_filename = filename
+
         msg = MIMEMultipart('mixed')
         msg["From"] = SMTP_USERNAME
         msg["To"] = FINANCE_MANAGER_EMAIL
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        # Attach the file
+        # Attach the file with proper format handling (same as send_quote_email)
         if file_bytes:
-            if not content_type:
-                content_type = "application/octet-stream"
-            attachment = MIMEApplication(file_bytes, Name=filename)
-            attachment['Content-Disposition'] = f'attachment; filename="{filename}"'
-            msg.attach(attachment)
+            try:
+                if content_type in ['application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']:
+                    attachment = MIMEApplication(file_bytes, _subtype=content_type.split('/')[-1])
+                    attachment.add_header('Content-Disposition', f'attachment; filename="{safe_filename}"')
+                    attachment.add_header('Content-Type', content_type)
+                    msg.attach(attachment)
+                else:
+                    attachment = MIMEBase(*content_type.split('/'))
+                    attachment.set_payload(file_bytes)
+                    encoders.encode_base64(attachment)
+                    attachment.add_header('Content-Disposition', f'attachment; filename="{safe_filename}"')
+                    attachment.add_header('Content-Type', f'{content_type}; name="{safe_filename}"')
+                    attachment.add_header('Content-Transfer-Encoding', 'base64')
+                    msg.attach(attachment)
+            except Exception as attachment_error:
+                logger.warning(f"Primary attachment method failed: {attachment_error}")
+                attachment = MIMEApplication(file_bytes, Name=safe_filename)
+                attachment['Content-Disposition'] = f'attachment; filename="{safe_filename}"'
+                msg.attach(attachment)
 
         smtp_password = os.getenv("SMTP_PASSWORD")
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
@@ -298,7 +371,7 @@ def send_unbudgeted_email(ref_number: str, requester_name: str, requester_email:
             server.login(SMTP_USERNAME, smtp_password)
             server.sendmail(SMTP_USERNAME, [FINANCE_MANAGER_EMAIL], msg.as_string())
 
-        logger.info(f"📧 Unbudgeted item email sent to Finance Manager for {ref_number}")
+        logger.info(f"📧 Unbudgeted item email sent to Finance Manager for {ref_number} (file: {safe_filename})")
     except Exception as e:
         logger.error(f"⚠️ Failed to send unbudgeted email: {e}")
 
@@ -978,7 +1051,7 @@ async def chat_webhook(request: Request):
             user_states[sender_email] = "awaiting_finance_deadline"
             return {"text": (
                 "3️⃣ What is the required deadline for this request?\n\n"
-                "Type a date (e.g. **10 Mar**), or type **urgent** if this requires immediate attention."
+                "Type a date in **YYYY/MM/DD** format (e.g. **2026/03/10**), or type **urgent** if this requires immediate attention."
             )}
 
         if state == "awaiting_finance_deadline":

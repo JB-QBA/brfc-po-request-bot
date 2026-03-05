@@ -1,4 +1,4 @@
-# P2P 3000 Bot – ENHANCED VERSION with Financial Year Selection
+# P2P 3000 Bot – ENHANCED VERSION with Financial Year Selection + Finance Requests + Google Tasks
 
 from fastapi import FastAPI, Request
 import os
@@ -47,6 +47,35 @@ XERO_TAB_NAME = "Xero"
 SENDER_EMAIL = "p2p.x@bahrainrfc.com"
 CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
 
+# === FINANCE REQUEST CONFIG ===
+FINANCE_CHAT_SPACE_ID = "spaces/AAAAA0zEepc"
+FINANCE_MANAGER_EMAIL = "finance@bahrainrfc.com"
+FINANCE_TEAM_EMAIL = "accounts@bahrainrfc.com"
+
+finance_categories = {
+    "1": "Supplier / Payment Query",
+    "2": "Customer / Revenue Query",
+    "3": "Unbudgeted Items",
+    "4": "Staff Matters",
+    "5": "Reporting Query",
+    "6": "Other"
+}
+
+# Maps department manager emails to their title and name for Unbudgeted Items emails
+department_manager_titles = {
+    "hr@bahrainrfc.com": ("Human Capital Manager", "Human Capital"),
+    "facilities@bahrainrfc.com": ("Facilities Manager", "Facilities"),
+    "clubhouse@bahrainrfc.com": ("Clubhouse Manager", "Clubhouse"),
+    "sports@bahrainrfc.com": ("Sports Manager", "Sports"),
+    "marketing@bahrainrfc.com": ("Marketing Manager", "Marketing"),
+    "sponsorship@bahrainrfc.com": ("Sponsorship Manager", "Sponsorship"),
+    "gym@bahrainrfc.com": ("Gym Manager", "Sports"),
+    "juniorsport@bahrainrfc.com": ("Junior Sport Manager", "Sports")
+}
+
+# Finance reference counter (in-memory, resets on restart - can be upgraded to persistent storage)
+finance_ref_counter = {"count": 0}
+
 # === USER GROUPS ===
 special_users = {
     "finance@bahrainrfc.com": "Johann",
@@ -85,6 +114,27 @@ def get_sheet_tab_names(financial_year: str, request_type: str):
     else:  # current year
         return SHEET_TAB_NAME if request_type == "OPEX" else CAPEX_TAB_NAME
 
+def generate_finance_ref():
+    """Generate a unique finance request reference number"""
+    finance_ref_counter["count"] += 1
+    return f"FIN-{datetime.now().strftime('%Y')}-{finance_ref_counter['count']:04d}"
+
+def get_manager_title(sender_email: str):
+    """Get the manager title for a given email"""
+    if sender_email in department_manager_titles:
+        return department_manager_titles[sender_email][0]
+    elif sender_email in special_users:
+        return "Finance Manager" if "finance" in sender_email else "General Manager"
+    return "Team Member"
+
+def get_manager_department(sender_email: str):
+    """Get the department for a given email"""
+    if sender_email in department_managers:
+        return department_managers[sender_email]
+    if sender_email in department_manager_titles:
+        return department_manager_titles[sender_email][1]
+    return "General"
+
 # === GOOGLE AUTH ===
 def get_creds(scopes):
     return Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
@@ -106,11 +156,198 @@ def get_gmail_service():
 def get_drive_service():
     return build("drive", "v3", credentials=get_creds(["https://www.googleapis.com/auth/drive.readonly"]))
 
+def get_tasks_service(user_email: str):
+    """Get Google Tasks service with domain-wide delegation for a specific user"""
+    try:
+        creds = get_creds(["https://www.googleapis.com/auth/tasks"])
+        delegated_creds = creds.with_subject(user_email)
+        return build("tasks", "v1", credentials=delegated_creds)
+    except Exception as e:
+        logger.error(f"Error creating Tasks service for {user_email}: {e}")
+        return None
+
+# === GOOGLE TASKS HELPER ===
+def create_google_task(assignee_email: str, title: str, notes: str, due_date: str = None):
+    """
+    Create a Google Task for the specified user.
+    due_date should be in YYYY/MM/DD format.
+    """
+    try:
+        service = get_tasks_service(assignee_email)
+        if not service:
+            logger.error(f"Could not create Tasks service for {assignee_email}")
+            return False
+
+        task_body = {
+            "title": title,
+            "notes": notes
+        }
+
+        # Convert YYYY/MM/DD to RFC 3339 format for Google Tasks API
+        if due_date and due_date != "URGENT":
+            try:
+                parsed_date = datetime.strptime(due_date, "%Y/%m/%d")
+                task_body["due"] = parsed_date.strftime("%Y-%m-%dT00:00:00.000Z")
+            except ValueError:
+                logger.warning(f"Could not parse due date: {due_date}")
+
+        # Create task in the user's primary task list
+        task_lists = service.tasklists().list(maxResults=1).execute()
+        if task_lists.get("items"):
+            tasklist_id = task_lists["items"][0]["id"]
+            result = service.tasks().insert(tasklist=tasklist_id, body=task_body).execute()
+            logger.info(f"✅ Google Task created for {assignee_email}: {title} (ID: {result.get('id')})")
+            return True
+        else:
+            logger.error(f"No task lists found for {assignee_email}")
+            return False
+
+    except Exception as e:
+        logger.error(f"⚠️ Failed to create Google Task for {assignee_email}: {e}")
+        return False
+
+# === FINANCE SPACE + EMAIL HELPERS ===
+def post_to_finance_space(text: str):
+    """Post a message to the Finance Team Chat space"""
+    try:
+        get_chat_service().spaces().messages().create(parent=FINANCE_CHAT_SPACE_ID, body={"text": text}).execute()
+        logger.info(f"📨 Posted to Finance Chat space")
+    except Exception as e:
+        logger.error(f"Error posting to Finance space: {e}")
+
+def send_finance_request_email(ref_number: str, category: str, details: str, addressee: str,
+                                deadline: str, requester_name: str, requester_email: str, department: str,
+                                extra_fields: dict = None):
+    """Send structured finance request email to Jo for tracking"""
+    try:
+        subject = f"[FINANCE-REQUEST] {ref_number} — {category} — {department}"
+
+        body = (
+            f"FINANCE-REQUEST-DATA\n"
+            f"========================\n"
+            f"Reference: {ref_number}\n"
+            f"Category: {category}\n"
+            f"Requester: {requester_name} ({requester_email})\n"
+            f"Department: {department}\n"
+            f"Addressed To: {addressee}\n"
+            f"Deadline: {deadline}\n"
+            f"Details: {details}\n"
+        )
+
+        if extra_fields:
+            for key, value in extra_fields.items():
+                body += f"{key}: {value}\n"
+
+        body += (
+            f"Request Timestamp: {datetime.now().isoformat()}\n"
+            f"========================\n"
+        )
+
+        msg = MIMEMultipart('mixed')
+        msg["From"] = SMTP_USERNAME
+        msg["To"] = SENDER_EMAIL
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, smtp_password)
+            server.sendmail(SMTP_USERNAME, [SENDER_EMAIL], msg.as_string())
+
+        logger.info(f"📧 Finance request email sent for {ref_number}")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to send Finance request email: {e}")
+
+def send_unbudgeted_email(ref_number: str, requester_name: str, requester_email: str,
+                           manager_title: str, department: str, filename: str, file_bytes: bytes,
+                           content_type: str = None):
+    """Send unbudgeted item email with attachment directly to Finance Manager"""
+    try:
+        subject = f"[UNBUDGETED] {department} — {requester_name} — {ref_number}"
+
+        body = (
+            f"Hi Johann,\n\n"
+            f"The {manager_title}, {requester_name}, has requested confirmation on where the "
+            f"attached quote is to be allocated within the existing budget.\n\n"
+            f"Reference: {ref_number}\n"
+            f"Department: {department}\n"
+            f"Submitted: {datetime.now().strftime('%Y/%m/%d %H:%M')}\n\n"
+            f"Please review the attached quote and advise on budget allocation.\n\n"
+            f"Regards,\n"
+            f"P2P 3000"
+        )
+
+        msg = MIMEMultipart('mixed')
+        msg["From"] = SMTP_USERNAME
+        msg["To"] = FINANCE_MANAGER_EMAIL
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        # Attach the file
+        if file_bytes:
+            if not content_type:
+                content_type = "application/octet-stream"
+            attachment = MIMEApplication(file_bytes, Name=filename)
+            attachment['Content-Disposition'] = f'attachment; filename="{filename}"'
+            msg.attach(attachment)
+
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, smtp_password)
+            server.sendmail(SMTP_USERNAME, [FINANCE_MANAGER_EMAIL], msg.as_string())
+
+        logger.info(f"📧 Unbudgeted item email sent to Finance Manager for {ref_number}")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to send unbudgeted email: {e}")
+
+def parse_deadline_input(text: str):
+    """Parse deadline input and return YYYY/MM/DD format or URGENT"""
+    text = text.strip().lower()
+    if text in ["urgent", "immediate", "asap", "now"]:
+        return datetime.now().strftime("%Y/%m/%d"), True
+
+    # Try common date formats
+    current_year = datetime.now().year
+    formats_to_try = [
+        "%d %b",        # 10 Mar
+        "%d %B",        # 10 March
+        "%d/%m/%Y",     # 10/03/2026
+        "%d/%m",        # 10/03
+        "%Y/%m/%d",     # 2026/03/10
+        "%d-%m-%Y",     # 10-03-2026
+        "%d %b %Y",     # 10 Mar 2026
+        "%d %B %Y",     # 10 March 2026
+    ]
+
+    for fmt in formats_to_try:
+        try:
+            parsed = datetime.strptime(text, fmt)
+            # If no year was in the format, use current year
+            if "%Y" not in fmt:
+                parsed = parsed.replace(year=current_year)
+                # If the date has already passed this year, use next year
+                if parsed < datetime.now():
+                    parsed = parsed.replace(year=current_year + 1)
+            return parsed.strftime("%Y/%m/%d"), False
+        except ValueError:
+            continue
+
+    # If we can't parse, return as-is with a note
+    return text, False
+
+def clear_user_state(sender_email: str):
+    """Clear all state for a user"""
+    for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
+        user_states.pop(k)
+    user_states[sender_email] = None
+
 # === ENHANCED CAPEX SHEET HELPERS ===
 def get_capital_items_for_department(department: str, sheet_tab: str = CAPEX_TAB_NAME):
     try:
         rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Data starts at row 3
-        return list(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F)
+        return sorted(set(row[1] for row in rows if len(row) > 5 and row[5].strip().lower() == department.lower() and row[1].strip()))  # Asset Item (col B), Department (col F) - sorted alphabetically
     except Exception as e:
         logger.error(f"Error getting capital items from {sheet_tab}: {e}")
         return []
@@ -212,7 +449,7 @@ def get_capex_actuals_for_account(account: str, project_ref: str):
 def get_cost_items_for_department(department: str, sheet_tab: str = SHEET_TAB_NAME):
     try:
         rows = get_gsheet().open_by_key(SPREADSHEET_ID).worksheet(sheet_tab).get_all_values()[2:]  # Changed from [1:] to [2:] - now starts at row 3
-        return list(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
+        return sorted(set(row[3] for row in rows if len(row) > 3 and row[1].strip().lower() == department.lower() and row[3].strip()))
     except Exception as e:
         logger.error(f"Error getting cost items from {sheet_tab}: {e}")
         return []
@@ -493,8 +730,9 @@ async def chat_webhook(request: Request):
             user_states.pop(sender_email, None)
             for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
                 user_states.pop(k)
-            return {"text": f"✅ No problem {first_name}, your PO flow has been reset. Just say hi to begin again."}
+            return {"text": f"✅ No problem {first_name}, your request has been reset. Just say hi to begin again."}
 
+        # === ATTACHMENT HANDLING ===
         if attachments:
             try:
                 att = attachments[0]
@@ -531,51 +769,114 @@ async def chat_webhook(request: Request):
                 # Log SHA256 hash of the original file for diagnostics
                 logger.info(f"Original file hash (SHA256): {hashlib.sha256(file_bytes).hexdigest()}")
 
-                # Send email with enhanced format preservation
-                send_quote_email(
-                    ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
-                    "PO Quote Submission - Enhanced Format",
-                    f"Quote uploaded by {first_name} ({sender_email})\n"
-                    f"Original filename: {filename}\n"
-                    f"Processed filename: (will be auto-detected with proper extension)\n"
-                    f"Original content type: {original_content_type}\n"
-                    f"Detected content type: {detected_content_type}\n"
-                    f"Final content type: {final_content_type}\n"
-                    f"File size: {len(file_bytes)} bytes\n"
-                    f"File hash: {hashlib.sha256(file_bytes).hexdigest()}",
-                    filename,
-                    file_bytes,
-                    final_content_type,
-                    sender_name=first_name
-                )
+                # === UNBUDGETED ITEMS FILE UPLOAD ===
+                if state == "awaiting_unbudgeted_file":
+                    ref_number = generate_finance_ref()
+                    department = get_manager_department(sender_email)
+                    manager_title = get_manager_title(sender_email)
 
-                # Get financial year and request type for shared space notification
-                financial_year = user_states.get(f"{sender_email}_financial_year", "current")
-                request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
-                fy_text = "🔥 **NEXT YEAR REQUEST** 🔥" if financial_year == "next" else ""
-                
-                post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} → {safe_filename if 'safe_filename' in locals() else filename} ({final_content_type}) {fy_text}")
-                user_states[sender_email] = "awaiting_q1"
-                return {"text": f"✅ File received and forwarded: {filename}\n📎 Processed as: {safe_filename if 'safe_filename' in locals() else filename}\n\n1️⃣ Does this quote require any upfront payments?"}
+                    # Send email with attachment to Finance Manager
+                    send_unbudgeted_email(ref_number, first_name, sender_email,
+                                          manager_title, department, filename, file_bytes, final_content_type)
+
+                    # Post to Finance Chat space
+                    summary = (
+                        f"📋 *Finance Request Received*\n"
+                        f"*Reference:* {ref_number}\n"
+                        f"*Category:* Unbudgeted Items\n"
+                        f"*From:* {first_name} ({department})\n"
+                        f"*File:* {filename}\n"
+                        f"*Sent to:* Finance Manager\n"
+                        f"*Submitted:* {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+                    )
+                    post_to_finance_space(summary)
+
+                    # Send tracking email to Jo
+                    send_finance_request_email(ref_number, "Unbudgeted Items", 
+                                               f"Quote uploaded: {filename}", "Finance Manager",
+                                               "Review required", first_name, sender_email, department)
+
+                    clear_user_state(sender_email)
+                    return {"text": (
+                        f"✅ File received. Thank you, {first_name}.\n\n"
+                        f"Your request has been forwarded to the Finance Manager for review and budget allocation guidance.\n\n"
+                        f"📋 **Reference:** {ref_number}\n"
+                        f"📂 **Category:** Unbudgeted Items\n"
+                        f"📧 **Sent to:** Finance Manager\n\n"
+                        f"You will be notified once a decision has been made.\n"
+                        f"Say **hi** to start a new request."
+                    )}
+
+                # === PO FLOW FILE UPLOAD (existing) ===
+                if state == "awaiting_file":
+                    # Send email with enhanced format preservation
+                    send_quote_email(
+                        ["bahrain-rugby-football-club-po@mail.approvalmax.com"],
+                        "PO Quote Submission - Enhanced Format",
+                        f"Quote uploaded by {first_name} ({sender_email})\n"
+                        f"Original filename: {filename}\n"
+                        f"Processed filename: (will be auto-detected with proper extension)\n"
+                        f"Original content type: {original_content_type}\n"
+                        f"Detected content type: {detected_content_type}\n"
+                        f"Final content type: {final_content_type}\n"
+                        f"File size: {len(file_bytes)} bytes\n"
+                        f"File hash: {hashlib.sha256(file_bytes).hexdigest()}",
+                        filename,
+                        file_bytes,
+                        final_content_type,
+                        sender_name=first_name
+                    )
+
+                    # Get financial year and request type for shared space notification
+                    financial_year = user_states.get(f"{sender_email}_financial_year", "current")
+                    request_type = user_states.get(f"{sender_email}_request_type", "OPEX")
+                    fy_text = "🔥 **NEXT YEAR REQUEST** 🔥" if financial_year == "next" else ""
+                    
+                    post_to_shared_space(f"📩 *Quote uploaded by {first_name}* — {filename} ({final_content_type}) {fy_text}")
+                    user_states[sender_email] = "awaiting_supplier_name"
+                    return {"text": f"✅ File received and forwarded: {filename}\n\nPlease carefully complete the following questions, in order to ensure an accurate and timely completion of your Purchase Order request:\n\n1️⃣ Kindly provide the name of the supplier?"}
+
+                # If no state matches for file upload
+                return {"text": f"📎 File received, but I wasn't expecting an upload right now. Say **hi** to start a new request."}
 
             except Exception as e:
                 logger.error(f"Attachment error: {e}")
                 return {"text": f"⚠️ Error handling attachment '{filename}': {str(e)}\n\nPlease try uploading the file again or contact support."}
 
-        # TEXT FLOW
+        # ============================================================
+        # TEXT FLOW - PO Questions (supplier details + existing Qs)
+        # ============================================================
+        if state == "awaiting_supplier_name":
+            user_states[f"{sender_email}_supplier_name"] = message_text
+            user_states[sender_email] = "awaiting_quote_value"
+            return {"text": "2️⃣ Kindly confirm the total value for the supplier quote?"}
+
+        if state == "awaiting_quote_value":
+            user_states[f"{sender_email}_quote_value"] = message_text
+            user_states[sender_email] = "awaiting_quote_reference"
+            return {"text": "3️⃣ Kindly provide the quote or reference number/details?"}
+
+        if state == "awaiting_quote_reference":
+            user_states[f"{sender_email}_quote_reference"] = message_text
+            user_states[sender_email] = "awaiting_q1"
+            return {"text": "4️⃣ Does this quote require any upfront payments?"}
+
         if state == "awaiting_q1":
             user_states[f"{sender_email}_q1"] = message_text
             user_states[sender_email] = "awaiting_q2"
-            return {"text": "2️⃣ Is this a foreign payment that requires GSA approval?"}
+            return {"text": "5️⃣ Is this a foreign payment that requires GSA approval?"}
 
         if state == "awaiting_q2":
             user_states[f"{sender_email}_q2"] = message_text
             user_states[sender_email] = "awaiting_comments"
-            return {"text": "3️⃣ Any comments you'd like to pass along to the PO team?"}
+            return {"text": "6️⃣ Any comments you'd like to pass along to the PO team?"}
 
         if state == "awaiting_comments":
             q1 = user_states.get(f"{sender_email}_q1", "N/A")
             q2 = user_states.get(f"{sender_email}_q2", "N/A")
+            supplier_name = user_states.get(f"{sender_email}_supplier_name", "N/A")
+            quote_value = user_states.get(f"{sender_email}_quote_value", "N/A")
+            quote_reference = user_states.get(f"{sender_email}_quote_reference", "N/A")
             comments = message_text
             cost_item = user_states.get(f"{sender_email}_cost_item")
             account = user_states.get(f"{sender_email}_account")
@@ -596,21 +897,293 @@ async def chat_webhook(request: Request):
                 f"*Account:* {account}\n"
                 f"*Department:* {department}\n"
                 f"*Reference:* {reference}\n"
-                f"1️⃣ Upfront Payment Required: {q1}\n"
-                f"2️⃣ Foreign Payment / GSA Approval: {q2}\n"
-                f"3️⃣ Comments to PO Team: {comments}"
+                f"1️⃣ Supplier Name: {supplier_name}\n"
+                f"2️⃣ Quote Value: {quote_value}\n"
+                f"3️⃣ Quote/Reference Number: {quote_reference}\n"
+                f"4️⃣ Upfront Payment Required: {q1}\n"
+                f"5️⃣ Foreign Payment / GSA Approval: {q2}\n"
+                f"6️⃣ Comments to PO Team: {comments}"
             )
 
             post_to_shared_space(summary)
+
+            # Send structured PO request data to Jo for tracking and reconciliation
+            try:
+                po_request_subject = f"[PO-REQUEST] {request_type} - {supplier_name} - {department} ({financial_year.title()} FY)"
+                po_request_body = (
+                    f"PO-REQUEST-DATA\n"
+                    f"================\n"
+                    f"Requester: {first_name} ({sender_email})\n"
+                    f"Request Type: {request_type}\n"
+                    f"Financial Year: {financial_year.title()}\n"
+                    f"Department: {department}\n"
+                    f"Cost Item: {cost_item}\n"
+                    f"Account: {account}\n"
+                    f"Reference: {reference}\n"
+                    f"Supplier Name: {supplier_name}\n"
+                    f"Quote Value: {quote_value}\n"
+                    f"Quote/Reference Number: {quote_reference}\n"
+                    f"Upfront Payment Required: {q1}\n"
+                    f"Foreign Payment / GSA Approval: {q2}\n"
+                    f"Comments: {comments}\n"
+                    f"Request Timestamp: {datetime.now().isoformat()}\n"
+                    f"================\n"
+                )
+                
+                # Send to bot email for Jo P2P Intelligence pickup
+                msg = MIMEMultipart('mixed')
+                msg["From"] = SMTP_USERNAME
+                msg["To"] = SENDER_EMAIL
+                msg["Subject"] = po_request_subject
+                msg.attach(MIMEText(po_request_body, "plain", "utf-8"))
+                
+                smtp_password = os.getenv("SMTP_PASSWORD")
+                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                    server.starttls()
+                    server.login(SMTP_USERNAME, smtp_password)
+                    server.sendmail(SMTP_USERNAME, [SENDER_EMAIL], msg.as_string())
+                
+                logger.info(f"📧 PO Request email sent to Jo ({SENDER_EMAIL}) for {supplier_name} - {department}")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to send PO request email to Jo: {e}")
+                # Non-blocking: don't fail the user flow if Jo email fails
             
             # Clear user state
-            for k in [k for k in user_states if k.startswith(f"{sender_email}_")]:
-                user_states.pop(k)
-            user_states[sender_email] = None
+            clear_user_state(sender_email)
             
             return {"text": f"Thanks {first_name}, you're all done ✅\n\n📞 **Pro tip:** Feel free to follow up with the procurement team to make sure everything was received okay!"}
 
+        # ============================================================
+        # FINANCE REQUEST FLOW
+        # ============================================================
+
+        # --- Standard finance query: details → addressee → deadline ---
+        if state == "awaiting_finance_details":
+            user_states[f"{sender_email}_finance_details"] = message_text
+            user_states[sender_email] = "awaiting_finance_addressee"
+            return {"text": (
+                "2️⃣ Who should this be addressed to?\n\n"
+                "Type **A** for the **Finance Team**\n"
+                "Type **B** for the **Finance Manager**"
+            )}
+
+        if state == "awaiting_finance_addressee":
+            choice = message_text.strip().upper()
+            if choice in ["A", "FINANCE TEAM", "TEAM"]:
+                user_states[f"{sender_email}_finance_addressee"] = "Finance Team"
+            elif choice in ["B", "FINANCE MANAGER", "MANAGER"]:
+                user_states[f"{sender_email}_finance_addressee"] = "Finance Manager"
+            else:
+                return {"text": "Please type **A** for Finance Team or **B** for Finance Manager."}
+            user_states[sender_email] = "awaiting_finance_deadline"
+            return {"text": (
+                "3️⃣ What is the required deadline for this request?\n\n"
+                "Type a date (e.g. **10 Mar**), or type **urgent** if this requires immediate attention."
+            )}
+
+        if state == "awaiting_finance_deadline":
+            deadline_str, is_urgent = parse_deadline_input(message_text)
+            category = user_states.get(f"{sender_email}_finance_category", "Other")
+            details = user_states.get(f"{sender_email}_finance_details", "N/A")
+            addressee = user_states.get(f"{sender_email}_finance_addressee", "Finance Team")
+            department = get_manager_department(sender_email)
+            ref_number = generate_finance_ref()
+
+            urgent_flag = "🚨 " if is_urgent else ""
+            deadline_display = f"URGENT — {deadline_str} (Today)" if is_urgent else deadline_str
+
+            # Post to Finance Chat space
+            summary = (
+                f"{urgent_flag}📋 *Finance Request Received*\n"
+                f"*Reference:* {ref_number}\n"
+                f"*Category:* {category}\n"
+                f"*From:* {first_name} ({department})\n"
+                f"*Addressed To:* {addressee}\n"
+                f"*Deadline:* {deadline_display}\n"
+                f"*Details:* {details}"
+            )
+            post_to_finance_space(summary)
+
+            # Send tracking email to Jo
+            send_finance_request_email(ref_number, category, details, addressee,
+                                        deadline_display, first_name, sender_email, department)
+
+            # Create Google Task
+            task_assignee = FINANCE_TEAM_EMAIL if addressee == "Finance Team" else FINANCE_MANAGER_EMAIL
+            task_title = f"[{ref_number}] {category} — {first_name} ({department})"
+            task_notes = f"Category: {category}\nFrom: {first_name} ({sender_email})\nDepartment: {department}\nDeadline: {deadline_display}\n\nDetails:\n{details}"
+            create_google_task(task_assignee, task_title, task_notes, deadline_str if not is_urgent else None)
+
+            clear_user_state(sender_email)
+            addressee_response = "The Finance Manager will respond to your query as a priority." if addressee == "Finance Manager" else "The Finance team will respond to your query shortly."
+            return {"text": (
+                f"Thanks {first_name}, your request has been logged and sent to Finance ✅\n\n"
+                f"📋 **Reference:** {ref_number}\n"
+                f"📂 **Category:** {category}\n"
+                f"📧 **Addressed to:** {addressee}\n"
+                f"⏰ **Deadline:** {deadline_display}\n\n"
+                f"{addressee_response}\n"
+                f"Say **hi** to start a new request."
+            )}
+
+        # --- Staff Matters: payment yes/no branch ---
+        if state == "awaiting_staff_payment_yn":
+            if message_text.strip().lower() in ["yes", "y"]:
+                user_states[sender_email] = "awaiting_staff_payment_nature"
+                return {"text": "2️⃣ What is the nature of the payment?\n\ne.g. **Advance**, **Loan**, **Reimbursement**, **Bonus**, **Other**"}
+            elif message_text.strip().lower() in ["no", "n"]:
+                # Revert to standard 3-question flow
+                user_states[sender_email] = "awaiting_finance_details"
+                return {"text": "No problem!\n\n1️⃣ Please provide the details of your staff-related query:"}
+            else:
+                return {"text": "Please type **Yes** or **No**."}
+
+        if state == "awaiting_staff_payment_nature":
+            user_states[f"{sender_email}_staff_payment_nature"] = message_text
+            user_states[sender_email] = "awaiting_staff_member_name"
+            return {"text": "3️⃣ What is the name of the staff member the payment needs to be made to?"}
+
+        if state == "awaiting_staff_member_name":
+            user_states[f"{sender_email}_staff_member_name"] = message_text
+            user_states[sender_email] = "awaiting_staff_payment_amount"
+            return {"text": "4️⃣ Kindly confirm the amount that needs to be paid?"}
+
+        if state == "awaiting_staff_payment_amount":
+            user_states[f"{sender_email}_staff_payment_amount"] = message_text
+            user_states[sender_email] = "awaiting_staff_payment_timing"
+            return {"text": (
+                "5️⃣ Payment timing:\n\n"
+                "Type **normal** if this can be included in the next upcoming payment run, "
+                "or type **immediate** if this is urgent and requires immediate payment."
+            )}
+
+        if state == "awaiting_staff_payment_timing":
+            timing = message_text.strip().lower()
+            if timing not in ["normal", "immediate"]:
+                return {"text": "Please type **normal** for next payment run or **immediate** for urgent payment."}
+
+            payment_nature = user_states.get(f"{sender_email}_staff_payment_nature", "N/A")
+            staff_member = user_states.get(f"{sender_email}_staff_member_name", "N/A")
+            amount = user_states.get(f"{sender_email}_staff_payment_amount", "N/A")
+            department = get_manager_department(sender_email)
+            ref_number = generate_finance_ref()
+            timing_display = "Next payment run" if timing == "normal" else "🚨 IMMEDIATE — Urgent payment required"
+
+            # Post to Finance Chat space
+            urgent_flag = "🚨 " if timing == "immediate" else ""
+            summary = (
+                f"{urgent_flag}📋 *Finance Request Received*\n"
+                f"*Reference:* {ref_number}\n"
+                f"*Category:* Staff Matters — Payment\n"
+                f"*From:* {first_name} ({department})\n"
+                f"*Payment Type:* {payment_nature}\n"
+                f"*Staff Member:* {staff_member}\n"
+                f"*Amount:* {amount}\n"
+                f"*Timing:* {timing_display}"
+            )
+            post_to_finance_space(summary)
+
+            # Send tracking email to Jo
+            send_finance_request_email(ref_number, "Staff Matters — Payment",
+                                        f"Payment to {staff_member}", "Finance Manager",
+                                        timing_display, first_name, sender_email, department,
+                                        extra_fields={
+                                            "Payment Type": payment_nature,
+                                            "Staff Member": staff_member,
+                                            "Amount": amount,
+                                            "Timing": timing_display
+                                        })
+
+            # Create Google Task for Finance Manager (staff payments always go to FM)
+            task_title = f"[{ref_number}] Staff Payment — {staff_member} ({amount})"
+            task_notes = (
+                f"Category: Staff Matters — Payment\n"
+                f"From: {first_name} ({sender_email})\n"
+                f"Department: {department}\n"
+                f"Payment Type: {payment_nature}\n"
+                f"Staff Member: {staff_member}\n"
+                f"Amount: {amount}\n"
+                f"Timing: {timing_display}"
+            )
+            create_google_task(FINANCE_MANAGER_EMAIL, task_title, task_notes)
+
+            clear_user_state(sender_email)
+            return {"text": (
+                f"Thanks {first_name}, your staff payment request has been logged ✅\n\n"
+                f"📋 **Reference:** {ref_number}\n"
+                f"👤 **Staff Member:** {staff_member}\n"
+                f"💰 **Amount:** {amount}\n"
+                f"📂 **Type:** {payment_nature}\n"
+                f"⏰ **Timing:** {timing_display}\n\n"
+                f"The Finance Manager will action this accordingly.\n"
+                f"Say **hi** to start a new request."
+            )}
+
+        # --- Finance category selection ---
+        if state == "awaiting_finance_category":
+            choice = message_text.strip()
+            if choice not in finance_categories:
+                return {"text": (
+                    "Please select a valid option (1-6):\n\n"
+                    "**1** — Supplier / Payment Query\n"
+                    "**2** — Customer / Revenue Query\n"
+                    "**3** — Unbudgeted Items\n"
+                    "**4** — Staff Matters\n"
+                    "**5** — Reporting Query\n"
+                    "**6** — Other"
+                )}
+
+            category = finance_categories[choice]
+            user_states[f"{sender_email}_finance_category"] = category
+
+            if choice == "3":  # Unbudgeted Items
+                user_states[sender_email] = "awaiting_unbudgeted_file"
+                return {"text": (
+                    f"**Unbudgeted Items** — Got it! 📋\n\n"
+                    f"Kindly upload the related quote for the costs that fall outside of our current budget.\n\n"
+                    f"📎 Please upload the file directly here in Chat."
+                )}
+            elif choice == "4":  # Staff Matters
+                user_states[sender_email] = "awaiting_staff_payment_yn"
+                return {"text": (
+                    f"**Staff Matters** — Got it! 👥\n\n"
+                    f"1️⃣ Do you require a payment to be made to a staff member?\n\n"
+                    f"Please type **Yes** or **No**."
+                )}
+            else:  # Standard 3-question flow (1, 2, 5, 6)
+                emoji_map = {"1": "💳", "2": "📈", "5": "📊", "6": "💬"}
+                user_states[sender_email] = "awaiting_finance_details"
+                return {"text": f"**{category}** — Got it! {emoji_map.get(choice, '✅')}\n\n1️⃣ Please provide the details of your query:"}
+
+        # --- Finance or PO selection ---
+        if state == "awaiting_finance_or_po":
+            if message_text.strip().lower() in ["finance", "fin"]:
+                user_states[sender_email] = "awaiting_finance_category"
+                return {"text": (
+                    "How can the Finance team help you today? 📊\n\n"
+                    "**Please select from the options below:**\n\n"
+                    "Press **1** for a **Supplier / Payment Query**\n"
+                    "Press **2** for a **Customer / Revenue Query**\n"
+                    "Press **3** for **Unbudgeted Items**\n"
+                    "Press **4** for **Staff Matters**\n"
+                    "Press **5** for a **Reporting Query**\n"
+                    "Press **6** for **Other**"
+                )}
+            elif message_text.strip().lower() in ["po", "purchase", "purchase order"]:
+                # Route to existing PO flow
+                user_states[sender_email] = "awaiting_opex_capex"
+                return {"text": (
+                    "Is this request for:\n\n"
+                    "💼 **Operational Expenditures** (type 'OPEX')\n"
+                    "🏗️ **Capital Expenditures** (type 'CAPEX')\n\n"
+                    "Please type either OPEX or CAPEX to continue."
+                )}
+            else:
+                return {"text": "Please type either **Finance** or **PO** to continue with the related request."}
+
+        # ============================================================
         # GREETING AND FINANCIAL YEAR SELECTION
+        # ============================================================
         if any(message_text.lower().startswith(g) for g in greeting_triggers):
             if sender_email not in special_users and sender_email not in department_managers:
                 return {"text": f"Hi {first_name}! I don't recognize your email address. Please contact an administrator to set up your access."}
@@ -622,19 +1195,31 @@ async def chat_webhook(request: Request):
             else:
                 # Outside July/August, skip financial year question and default to current
                 user_states[f"{sender_email}_financial_year"] = "current"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"Hi {first_name}! 👋\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+                user_states[sender_email] = "awaiting_finance_or_po"
+                return {"text": (
+                    f"Hi {first_name}! 👋\n\n"
+                    f"Is this a **Finance** or **PO** request?\n\n"
+                    f"Please type either **Finance** or **PO** to continue with the related request."
+                )}
 
         # Handle financial year selection (only in July/August)
         if state == "awaiting_financial_year":
             if message_text.lower() in ["current", "current year", "this year"]:
                 user_states[f"{sender_email}_financial_year"] = "current"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"✅ Current financial year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+                user_states[sender_email] = "awaiting_finance_or_po"
+                return {"text": (
+                    "✅ Current financial year selected.\n\n"
+                    "Is this a **Finance** or **PO** request?\n\n"
+                    "Please type either **Finance** or **PO** to continue with the related request."
+                )}
             elif message_text.lower() in ["next", "next year", "upcoming"]:
                 user_states[f"{sender_email}_financial_year"] = "next"
-                user_states[sender_email] = "awaiting_opex_capex"
-                return {"text": f"✅ Next financial year selected.\n\nIs this request for:\n\n💼 **Operational Expenditures** (type 'OPEX')\n🏗️ **Capital Expenditures** (type 'CAPEX')\n\nPlease type either OPEX or CAPEX to continue."}
+                user_states[sender_email] = "awaiting_finance_or_po"
+                return {"text": (
+                    "✅ Next financial year selected.\n\n"
+                    "Is this a **Finance** or **PO** request?\n\n"
+                    "Please type either **Finance** or **PO** to continue with the related request."
+                )}
             else:
                 return {"text": f"Please type either 'current' for this financial year or 'next' for the upcoming financial year."}
 
@@ -794,4 +1379,4 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return {"message": "P2P 3000 Enhanced with Financial Year Selection is running"}
+    return {"message": "P2P 3000 Enhanced with Finance Requests + Google Tasks is running"}

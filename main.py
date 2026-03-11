@@ -1085,7 +1085,7 @@ async def chat_webhook(request: Request):
             task_assignee = FINANCE_TEAM_EMAIL if addressee == "Finance Team" else FINANCE_MANAGER_EMAIL
             task_title = f"[{ref_number}] {category} — {first_name} ({department})"
             task_notes = f"Category: {category}\nFrom: {first_name} ({sender_email})\nDepartment: {department}\nDeadline: {deadline_display}\n\nDetails:\n{details}"
-            create_google_task(task_assignee, task_title, task_notes, deadline_str if not is_urgent else None)
+            create_google_task(task_assignee, task_title, task_notes, deadline_str)
 
             clear_user_state(sender_email)
             addressee_response = "The Finance Manager will respond to your query as a priority." if addressee == "Finance Manager" else "The Finance team will respond to your query shortly."

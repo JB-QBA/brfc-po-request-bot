@@ -1099,99 +1099,6 @@ async def chat_webhook(request: Request):
                 f"Say **hi** to start a new request."
             )}
 
-        # --- Staff Matters: payment yes/no branch ---
-        if state == "awaiting_staff_payment_yn":
-            if message_text.strip().lower() in ["yes", "y"]:
-                user_states[sender_email] = "awaiting_staff_payment_nature"
-                return {"text": "2️⃣ What is the nature of the payment?\n\ne.g. **Advance**, **Loan**, **Reimbursement**, **Bonus**, **Other**"}
-            elif message_text.strip().lower() in ["no", "n"]:
-                # Revert to standard 3-question flow
-                user_states[sender_email] = "awaiting_finance_details"
-                return {"text": "No problem!\n\n1️⃣ Please provide the details of your staff-related query:"}
-            else:
-                return {"text": "Please type **Yes** or **No**."}
-
-        if state == "awaiting_staff_payment_nature":
-            user_states[f"{sender_email}_staff_payment_nature"] = message_text
-            user_states[sender_email] = "awaiting_staff_member_name"
-            return {"text": "3️⃣ What is the name of the staff member the payment needs to be made to?"}
-
-        if state == "awaiting_staff_member_name":
-            user_states[f"{sender_email}_staff_member_name"] = message_text
-            user_states[sender_email] = "awaiting_staff_payment_amount"
-            return {"text": "4️⃣ Kindly confirm the amount that needs to be paid?"}
-
-        if state == "awaiting_staff_payment_amount":
-            user_states[f"{sender_email}_staff_payment_amount"] = message_text
-            user_states[sender_email] = "awaiting_staff_payment_timing"
-            return {"text": (
-                "5️⃣ Payment timing:\n\n"
-                "Type **normal** if this can be included in the next upcoming payment run, "
-                "or type **immediate** if this is urgent and requires immediate payment."
-            )}
-
-        if state == "awaiting_staff_payment_timing":
-            timing = message_text.strip().lower()
-            if timing not in ["normal", "immediate"]:
-                return {"text": "Please type **normal** for next payment run or **immediate** for urgent payment."}
-
-            payment_nature = user_states.get(f"{sender_email}_staff_payment_nature", "N/A")
-            staff_member = user_states.get(f"{sender_email}_staff_member_name", "N/A")
-            amount = user_states.get(f"{sender_email}_staff_payment_amount", "N/A")
-            department = get_manager_department(sender_email)
-            ref_number = generate_finance_ref()
-            timing_display = "Next payment run" if timing == "normal" else "🚨 IMMEDIATE — Urgent payment required"
-
-            # Post to Finance Chat space
-            urgent_flag = "🚨 " if timing == "immediate" else ""
-            summary = (
-                f"{urgent_flag}📋 *Finance Request Received*\n"
-                f"*Reference:* {ref_number}\n"
-                f"*Category:* Staff Matters — Payment\n"
-                f"*From:* {first_name} ({department})\n"
-                f"*Payment Type:* {payment_nature}\n"
-                f"*Staff Member:* {staff_member}\n"
-                f"*Amount:* {amount}\n"
-                f"*Timing:* {timing_display}"
-            )
-            post_to_finance_space(summary)
-
-            # Send tracking email to Jo
-            send_finance_request_email(ref_number, "Staff Matters — Payment",
-                                        f"Payment to {staff_member}", "Finance Manager",
-                                        timing_display, first_name, sender_email, department,
-                                        extra_fields={
-                                            "Payment Type": payment_nature,
-                                            "Staff Member": staff_member,
-                                            "Amount": amount,
-                                            "Timing": timing_display
-                                        })
-
-            # Create Google Task for Finance Manager (staff payments always go to FM)
-            task_title = f"[{ref_number}] Staff Payment — {staff_member} ({amount})"
-            task_notes = (
-                f"Category: Staff Matters — Payment\n"
-                f"From: {first_name} ({sender_email})\n"
-                f"Department: {department}\n"
-                f"Payment Type: {payment_nature}\n"
-                f"Staff Member: {staff_member}\n"
-                f"Amount: {amount}\n"
-                f"Timing: {timing_display}"
-            )
-            create_google_task(FINANCE_MANAGER_EMAIL, task_title, task_notes)
-
-            clear_user_state(sender_email)
-            return {"text": (
-                f"Thanks {first_name}, your staff payment request has been logged ✅\n\n"
-                f"📋 **Reference:** {ref_number}\n"
-                f"👤 **Staff Member:** {staff_member}\n"
-                f"💰 **Amount:** {amount}\n"
-                f"📂 **Type:** {payment_nature}\n"
-                f"⏰ **Timing:** {timing_display}\n\n"
-                f"The Finance Manager will action this accordingly.\n"
-                f"Say **hi** to start a new request."
-            )}
-
         # --- Finance category selection ---
         if state == "awaiting_finance_category":
             choice = message_text.strip()
@@ -1216,15 +1123,8 @@ async def chat_webhook(request: Request):
                     f"Kindly upload the related quote for the costs that fall outside of our current budget.\n\n"
                     f"📎 Please upload the file directly here in Chat."
                 )}
-            elif choice == "4":  # Staff Matters
-                user_states[sender_email] = "awaiting_staff_payment_yn"
-                return {"text": (
-                    f"**Staff Matters** — Got it! 👥\n\n"
-                    f"1️⃣ Do you require a payment to be made to a staff member?\n\n"
-                    f"Please type **Yes** or **No**."
-                )}
-            else:  # Standard 3-question flow (1, 2, 5, 6)
-                emoji_map = {"1": "💳", "2": "📈", "5": "📊", "6": "💬"}
+            else:  # Standard 3-question flow (1, 2, 4, 5, 6)
+                emoji_map = {"1": "💳", "2": "📈", "4": "👥", "5": "📊", "6": "💬"}
                 user_states[sender_email] = "awaiting_finance_details"
                 return {"text": f"**{category}** — Got it! {emoji_map.get(choice, '✅')}\n\n1️⃣ Please provide the details of your query:"}
 

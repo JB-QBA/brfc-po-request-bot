@@ -79,7 +79,8 @@ finance_ref_counter = {"count": 0}
 # === USER GROUPS ===
 special_users = {
     "finance@bahrainrfc.com": "Johann",
-    "generalmanager@bahrainrfc.com": "Paul"
+    "generalmanager@bahrainrfc.com": "Paul",
+    "admins@bahrainrfc.com": "Sarah"
 }
 
 department_managers = {

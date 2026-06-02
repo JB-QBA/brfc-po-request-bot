@@ -49,7 +49,7 @@ CHAT_SPACE_ID = "spaces/AAQAs4dLeAY"
 
 # === FINANCE REQUEST CONFIG ===
 FINANCE_CHAT_SPACE_ID = "spaces/AAAAA0zEepc"
-FINANCE_MANAGER_EMAIL = "finance@bahrainrfc.com"
+FINANCE_MANAGER_EMAIL = "fm@bahrainrfc.com"
 FINANCE_TEAM_EMAIL = "accounts@bahrainrfc.com"
 
 finance_categories = {
@@ -78,8 +78,8 @@ finance_ref_counter = {"count": 0}
 
 # === USER GROUPS ===
 special_users = {
-    "finance@bahrainrfc.com": "Johann",
-    "generalmanager@bahrainrfc.com": "Paul",
+    "fm@bahrainrfc.com": "Johann",
+    "gm@bahrainrfc.com": "Paul",
     "admins@bahrainrfc.com": "Sarah"
 }
 

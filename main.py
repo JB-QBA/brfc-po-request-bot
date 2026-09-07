@@ -66,7 +66,8 @@ department_manager_titles = {
     "hr@bahrainrfc.com": ("Human Capital Manager", "Human Capital"),
     "facilities@bahrainrfc.com": ("Facilities Manager", "Facilities"),
     "clubhouse@bahrainrfc.com": ("Clubhouse Manager", "Clubhouse"),
-    "sports@bahrainrfc.com": ("Sports Manager", "Sports"),
+    "sports@bahrainrfc.com": ("Head of Sports", "Sports"),
+    "sports.manager@bahrainrfc.com": ("Sports Manager", "Sports"),
     "marketing@bahrainrfc.com": ("Marketing Manager", "Marketing"),
     "sponsorship@bahrainrfc.com": ("Sponsorship Manager", "Sponsorship"),
     "gym@bahrainrfc.com": ("Gym Manager", "Sports"),
@@ -88,9 +89,11 @@ department_managers = {
     "facilities@bahrainrfc.com": "Facilities",
     "clubhouse@bahrainrfc.com": "Clubhouse",
     "sports@bahrainrfc.com": "Sports",
+    "sports.manager@bahrainrfc.com": "Sports",
     "marketing@bahrainrfc.com": "Marketing",
     "sponsorship@bahrainrfc.com": "Sponsorship",
     "gym@bahrainrfc.com": "Sports",
+    "sports.assistant@bahrainrfc.com": "Sports",
     "juniorsport@bahrainrfc.com": "Sports"
 }
 
